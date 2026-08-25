@@ -4,14 +4,18 @@ mod state;
 
 use std::path::PathBuf;
 
-use commands::is_markdown;
+use commands::{is_image, is_markdown};
+use models::ImageDropPayload;
 use state::AppState;
 use tauri::{
-    Emitter, Manager,
+    DragDropEvent, Emitter, Manager, WindowEvent,
     menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder},
 };
 
 fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
+    let new_file = MenuItemBuilder::with_id("new-file", "Neue Datei")
+        .accelerator("CmdOrCtrl+N")
+        .build(app)?;
     let open_file = MenuItemBuilder::with_id("open-file", "Datei öffnen …")
         .accelerator("CmdOrCtrl+O")
         .build(app)?;
@@ -20,6 +24,12 @@ fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
         .build(app)?;
     let save = MenuItemBuilder::with_id("save", "Speichern")
         .accelerator("CmdOrCtrl+S")
+        .build(app)?;
+    let save_as = MenuItemBuilder::with_id("save-as", "Speichern unter …")
+        .accelerator("CmdOrCtrl+Shift+S")
+        .build(app)?;
+    let quick_open = MenuItemBuilder::with_id("quick-open", "Schnell öffnen …")
+        .accelerator("CmdOrCtrl+P")
         .build(app)?;
     let find = MenuItemBuilder::with_id("find", "Suchen …")
         .accelerator("CmdOrCtrl+F")
@@ -40,9 +50,12 @@ fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
         .quit()
         .build()?;
     let file_menu = SubmenuBuilder::new(app, "Ablage")
-        .items(&[&open_file, &open_folder])
+        .item(&new_file)
+        .separator()
+        .items(&[&open_file, &open_folder, &quick_open])
         .separator()
         .item(&save)
+        .item(&save_as)
         .separator()
         .close_window()
         .build()?;
@@ -74,7 +87,14 @@ fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
         let identifier = event.id().as_ref();
         if matches!(
             identifier,
-            "open-file" | "open-folder" | "save" | "find" | "toggle-sidebar"
+            "new-file"
+                | "open-file"
+                | "open-folder"
+                | "quick-open"
+                | "save"
+                | "save-as"
+                | "find"
+                | "toggle-sidebar"
         ) {
             let _ = app.emit("menu-action", identifier);
         }
@@ -97,20 +117,57 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::authorize_document,
+            commands::cancel_document_save_path,
+            commands::cancel_image_drop,
             commands::choose_markdown_files,
             commands::choose_workspace,
+            commands::choose_document_save_path,
             commands::drain_open_paths,
+            commands::import_image_file,
             commands::list_directory,
+            commands::list_workspace_markdown,
             commands::load_session,
             commands::read_document,
             commands::read_local_asset,
             commands::save_document,
+            commands::save_document_as,
+            commands::save_image_bytes,
             commands::save_session,
         ])
         .build(tauri::generate_context!())
         .expect("Marky konnte nicht gestartet werden");
 
     application.run(|app, event| match event {
+        tauri::RunEvent::WindowEvent {
+            label,
+            event: WindowEvent::DragDrop(DragDropEvent::Drop { paths, position }),
+            ..
+        } if label == "main" => {
+            let image_paths = paths
+                .into_iter()
+                .filter(|path| is_image(path))
+                .collect::<Vec<_>>();
+            let accepted = app
+                .state::<AppState>()
+                .authorize_dropped_files(&image_paths);
+            if accepted.is_empty() {
+                return;
+            }
+            let scale_factor = app
+                .get_webview_window("main")
+                .and_then(|window| window.scale_factor().ok())
+                .unwrap_or(1.0);
+            let logical = position.to_logical::<f64>(scale_factor);
+            let payload = ImageDropPayload {
+                paths: accepted
+                    .iter()
+                    .filter_map(|path| path.to_str().map(ToOwned::to_owned))
+                    .collect(),
+                x: logical.x,
+                y: logical.y,
+            };
+            let _ = app.emit("image-drop", payload);
+        }
         tauri::RunEvent::Opened { urls } => {
             let paths = urls
                 .into_iter()

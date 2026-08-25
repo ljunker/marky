@@ -4,7 +4,7 @@ import { readLocalAsset } from "../api";
 import { renderMarkdown } from "../lib/markdown";
 
 interface MarkdownPreviewProps {
-  documentPath: string;
+  documentPath: string | null;
   source: string;
 }
 
@@ -21,6 +21,7 @@ export function MarkdownPreview({
   }, [source]);
 
   useEffect(() => {
+    if (!documentPath) return;
     let cancelled = false;
     const objectUrls: string[] = [];
     const images = containerRef.current?.querySelectorAll<HTMLImageElement>(

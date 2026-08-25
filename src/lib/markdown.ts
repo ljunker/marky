@@ -15,6 +15,7 @@ import MarkdownIt, {
   type RendererRule,
 } from "markdown-it";
 import taskLists from "markdown-it-task-lists";
+import type { OutlineItem } from "../types";
 
 const transparentPixel =
   "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
@@ -116,4 +117,71 @@ export function renderMarkdown(source: string): string {
     FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form"],
     FORBID_ATTR: ["srcdoc"],
   });
+}
+
+export interface TextStats {
+  words: number;
+  characters: number;
+  lines: number;
+  readingMinutes: number;
+}
+
+export function extractOutline(source: string): OutlineItem[] {
+  const tokens = markdown.parse(source, {});
+  const lineOffsets = buildLineOffsets(source);
+  const items: OutlineItem[] = [];
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.type !== "heading_open" || !token.map) continue;
+    const level = Number(token.tag.slice(1));
+    const inline = tokens[index + 1];
+    const text = inline?.type === "inline"
+      ? visibleInlineText(inline.children ?? [], true).trim()
+      : "";
+    const lineIndex = token.map[0];
+    items.push({
+      level,
+      text: text || "(Ohne Titel)",
+      line: lineIndex + 1,
+      offset: lineOffsets[lineIndex] ?? 0,
+    });
+  }
+  return items;
+}
+
+export function computeTextStats(source: string): TextStats {
+  const tokens = markdown.parse(source, {});
+  const visibleText = tokens
+    .filter((token) => token.type === "inline")
+    .map((token) => visibleInlineText(token.children ?? [], false))
+    .join(" ");
+  const words = visibleText.match(/[\p{L}\p{N}][\p{L}\p{M}\p{N}'’\-]*/gu)?.length ?? 0;
+  return {
+    words,
+    characters: [...source].length,
+    lines: source.split("\n").length,
+    readingMinutes: words === 0 ? 0 : Math.ceil(words / 200),
+  };
+}
+
+function visibleInlineText(
+  tokens: Array<{ type: string; content: string }>,
+  includeCode: boolean,
+): string {
+  return tokens
+    .map((token) => {
+      if (token.type === "text" || token.type === "image") return token.content;
+      if (includeCode && token.type === "code_inline") return token.content;
+      if (token.type === "softbreak" || token.type === "hardbreak") return " ";
+      return "";
+    })
+    .join("");
+}
+
+function buildLineOffsets(source: string): number[] {
+  const offsets = [0];
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "\n") offsets.push(index + 1);
+  }
+  return offsets;
 }

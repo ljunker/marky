@@ -4,8 +4,10 @@ import type {
   DirectoryEntry,
   DocumentPayload,
   FileRevision,
+  ImportedAsset,
   SaveResult,
   SessionState,
+  WorkspaceFile,
 } from "./types";
 
 export const chooseMarkdownFiles = (): Promise<string[]> =>
@@ -13,6 +15,14 @@ export const chooseMarkdownFiles = (): Promise<string[]> =>
 
 export const chooseWorkspace = (): Promise<string | null> =>
   invoke("choose_workspace");
+
+export const chooseDocumentSavePath = (
+  suggestedName: string,
+): Promise<string | null> =>
+  invoke("choose_document_save_path", { suggestedName });
+
+export const cancelDocumentSavePath = (path: string): Promise<void> =>
+  invoke("cancel_document_save_path", { path });
 
 export const authorizeDocument = (path: string): Promise<string> =>
   invoke("authorize_document", { path });
@@ -29,6 +39,31 @@ export const saveDocument = (
   source: string,
 ): Promise<SaveResult> =>
   invoke("save_document", { path, expectedRevision, source });
+
+export const saveDocumentAs = (
+  path: string,
+  source: string,
+): Promise<DocumentPayload> => invoke("save_document_as", { path, source });
+
+export const listWorkspaceMarkdown = (
+  root: string,
+): Promise<WorkspaceFile[]> => invoke("list_workspace_markdown", { root });
+
+export const importImageFile = (
+  documentPath: string,
+  sourcePath: string,
+): Promise<ImportedAsset> =>
+  invoke("import_image_file", { documentPath, sourcePath });
+
+export const cancelImageDrop = (paths: string[]): Promise<void> =>
+  invoke("cancel_image_drop", { paths });
+
+export const saveImageBytes = (
+  documentPath: string,
+  mimeType: string,
+  base64: string,
+): Promise<ImportedAsset> =>
+  invoke("save_image_bytes", { documentPath, mimeType, base64 });
 
 export const readLocalAsset = (
   documentPath: string,

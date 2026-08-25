@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { isRelativeAsset, renderMarkdown } from "./markdown";
+import {
+  computeTextStats,
+  extractOutline,
+  isRelativeAsset,
+  renderMarkdown,
+} from "./markdown";
 
 describe("Markdown-Vorschau", () => {
   it("rendert GitHub-artige Blöcke", () => {
@@ -21,6 +26,21 @@ fn main() {}
     expect(html).toContain("<table>");
     expect(html).toContain("task-list-item");
     expect(html).toContain("hljs");
+  });
+
+  it("extrahiert Überschriften außerhalb von Codeblöcken", () => {
+    const outline = extractOutline(`# Eins\n\nTitel\n=====\n\n\`\`\`md\n# Kein Eintrag\n\`\`\``);
+    expect(outline.map(({ level, text, line }) => ({ level, text, line }))).toEqual([
+      { level: 1, text: "Eins", line: 1 },
+      { level: 1, text: "Titel", line: 3 },
+    ]);
+  });
+
+  it("zählt sichtbaren Text ohne Markdown-Syntax und Code", () => {
+    const stats = computeTextStats("# Hallo **Marky**\n\n```ts\nconst geheim = 1\n```");
+    expect(stats.words).toBe(2);
+    expect(stats.lines).toBe(5);
+    expect(stats.readingMinutes).toBe(1);
   });
 
   it("entfernt aktive HTML-Inhalte", () => {

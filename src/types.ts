@@ -11,9 +11,15 @@ export interface DocumentPayload {
   revision: FileRevision;
 }
 
-export interface DocumentState extends DocumentPayload {
-  savedSource: string;
-  cursor: number;
+export interface DocumentState {
+  id: string;
+  path: string | null;
+  name: string;
+  source: string;
+  revision: FileRevision | null;
+  savedSource: string | null;
+  selectionFrom: number;
+  selectionTo: number;
   scrollTop: number;
   missing?: boolean;
 }
@@ -25,6 +31,30 @@ export interface DirectoryEntry {
   path: string;
   kind: EntryKind;
   isSymlink: boolean;
+}
+
+export interface WorkspaceFile {
+  path: string;
+  name: string;
+  relativePath: string;
+}
+
+export interface ImportedAsset {
+  relativePath: string;
+  displayName: string;
+}
+
+export interface ImageDropPayload {
+  paths: string[];
+  x: number;
+  y: number;
+}
+
+export interface OutlineItem {
+  level: number;
+  text: string;
+  line: number;
+  offset: number;
 }
 
 export type SaveResult =
@@ -40,11 +70,15 @@ export interface SessionState {
   workspaceRoot: string | null;
   openPaths: string[];
   activePath: string | null;
+  recentPaths: string[];
   expandedDirectories: string[];
+  sidebarMode: SidebarMode;
   sidebarCollapsed: boolean;
   sidebarWidth: number;
   editorRatio: number;
 }
+
+export type SidebarMode = "files" | "outline";
 
 export interface FileSystemChange {
   paths: string[];
@@ -64,4 +98,4 @@ export interface DialogSpec {
 }
 
 export const isDirty = (document: DocumentState): boolean =>
-  document.source !== document.savedSource;
+  document.savedSource === null || document.source !== document.savedSource;

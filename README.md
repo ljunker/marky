@@ -1,8 +1,24 @@
-# Marky
+# Marky 0.2.0
 
 Marky ist ein fokussierter Markdown-Editor für macOS 26. Die App kombiniert einen Dateibaum, einen Raw-Editor mit Syntaxhervorhebung und eine Live-Vorschau in einem Fenster.
 
 Über der Texteingabe bietet eine kompakte Werkzeugleiste Formatierungen für Fett, Kursiv, Durchgestrichen, Inline-Code, Überschriften, Listen, Aufgabenlisten, Zitate, Links, Bilder und Tabellen. Markierter Text wird direkt mit der passenden Markdown-Syntax umschlossen; `⌘B` und `⌘I` funktionieren zusätzlich als Tastenkürzel.
+
+Version 0.2 ergänzt unbenannte Dokumente mit „Speichern unter“, eine Schnellöffnen-Palette, eine live aktualisierte Gliederung, Text- und Auswahlstatistiken sowie den Import gezogener oder eingefügter Bilder in einen lokalen `assets`-Ordner. Listen werden beim Drücken von Enter intelligent fortgeführt und markierte Texte lassen sich durch Einfügen einer Webadresse direkt verlinken.
+
+## Tastenkürzel
+
+| Kürzel | Aktion |
+| --- | --- |
+| `⌘N` | Neue Datei |
+| `⌘O` | Datei öffnen |
+| `⇧⌘O` | Ordner öffnen |
+| `⌘P` | Schnell öffnen |
+| `⌘S` | Speichern |
+| `⇧⌘S` | Speichern unter |
+| `⌘F` | Im Dokument suchen |
+| `⌘B` | Auswahl fett formatieren |
+| `⌘I` | Auswahl kursiv formatieren |
 
 ## Entwicklung
 

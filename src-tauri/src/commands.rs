@@ -12,8 +12,8 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::{
     models::{
-        AssetData, DirectoryEntry, DocumentPayload, EntryKind, FileRevision, SaveResult,
-        SessionState,
+        AssetData, DirectoryEntry, DocumentPayload, EntryKind, FileRevision, ImportedAsset,
+        SaveResult, SessionState, WorkspaceFile,
     },
     state::AppState,
 };
@@ -21,6 +21,7 @@ use crate::{
 const MARKDOWN_EXTENSIONS: &[&str] = &["md", "markdown"];
 const IMAGE_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "avif", "svg"];
 const MAX_IMAGE_BYTES: u64 = 30 * 1024 * 1024;
+const MAX_RECENT_PATHS: usize = 30;
 
 #[tauri::command]
 pub async fn choose_markdown_files(
@@ -68,6 +69,82 @@ pub async fn choose_workspace(
         .map_err(|error| format!("Ordnerpfad ist ungültig: {error}"))?;
     let canonical = state.authorize_root(&path)?;
     Ok(Some(path_string(&canonical)?))
+}
+
+#[tauri::command]
+pub async fn choose_document_save_path(
+    app: AppHandle,
+    suggested_name: String,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, String> {
+    let Some(selection) = app
+        .dialog()
+        .file()
+        .set_title("Markdown-Datei speichern")
+        .set_file_name(suggested_name)
+        .add_filter("Markdown", MARKDOWN_EXTENSIONS)
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+
+    let mut path = selection
+        .into_path()
+        .map_err(|error| format!("Dateipfad ist ungültig: {error}"))?;
+    if path.extension().is_none() {
+        path.set_extension("md");
+    }
+    if !is_markdown(&path) {
+        return Err("Dateien müssen die Erweiterung .md oder .markdown haben".into());
+    }
+    let normalized = state.authorize_save_target(&path)?;
+    Ok(Some(path_string(&normalized)?))
+}
+
+#[tauri::command]
+pub fn save_document_as(
+    path: String,
+    source: String,
+    state: State<'_, AppState>,
+) -> Result<DocumentPayload, String> {
+    let path = state.consume_save_target(Path::new(&path))?;
+    if !is_markdown(&path) {
+        return Err("Dateien müssen die Erweiterung .md oder .markdown haben".into());
+    }
+    if path.exists() {
+        let existing = fs::read(&path)
+            .map_err(|error| format!("Vorhandene Datei kann nicht geprüft werden: {error}"))?;
+        String::from_utf8(existing).map_err(|_| {
+            "Die vorhandene Datei ist nicht als UTF-8 gespeichert und wird nicht überschrieben"
+                .to_string()
+        })?;
+        atomic_write(&path, source.as_bytes())?;
+    } else {
+        atomic_create(&path, source.as_bytes())?;
+    }
+    let canonical = state.authorize_file(&path)?;
+    read_document_from_path(&canonical)
+}
+
+#[tauri::command]
+pub fn cancel_document_save_path(path: String, state: State<'_, AppState>) -> Result<(), String> {
+    state.revoke_save_target(Path::new(&path))
+}
+
+#[tauri::command]
+pub fn list_workspace_markdown(
+    root: String,
+    state: State<'_, AppState>,
+) -> Result<Vec<WorkspaceFile>, String> {
+    let root = state.ensure_directory_access(Path::new(&root))?;
+    let mut files = Vec::new();
+    collect_workspace_markdown(&root, &root, &mut files)?;
+    files.sort_by(|left, right| {
+        left.relative_path
+            .to_lowercase()
+            .cmp(&right.relative_path.to_lowercase())
+    });
+    Ok(files)
 }
 
 #[tauri::command]
@@ -173,6 +250,60 @@ pub fn save_document(
 }
 
 #[tauri::command]
+pub fn import_image_file(
+    document_path: String,
+    source_path: String,
+    state: State<'_, AppState>,
+) -> Result<ImportedAsset, String> {
+    let source = state.consume_dropped_file(Path::new(&source_path))?;
+    if !is_image(&source) {
+        return Err("Dieses Bildformat wird nicht unterstützt".into());
+    }
+    let metadata = fs::metadata(&source)
+        .map_err(|error| format!("Bilddatei kann nicht geprüft werden: {error}"))?;
+    validate_image_size(metadata.len())?;
+    let bytes = fs::read(&source)
+        .map_err(|error| format!("Bilddatei kann nicht gelesen werden: {error}"))?;
+    let original_name = source
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("bild.png");
+    write_asset(&document_path, original_name, &bytes, &state)
+}
+
+#[tauri::command]
+pub fn cancel_image_drop(paths: Vec<String>, state: State<'_, AppState>) -> Result<(), String> {
+    let paths = paths.into_iter().map(PathBuf::from).collect::<Vec<_>>();
+    state.revoke_dropped_files(&paths)
+}
+
+#[tauri::command]
+pub fn save_image_bytes(
+    document_path: String,
+    mime_type: String,
+    base64: String,
+    state: State<'_, AppState>,
+) -> Result<ImportedAsset, String> {
+    let extension = extension_for_clipboard_mime(&mime_type).ok_or_else(|| {
+        "Dieses Bildformat aus der Zwischenablage wird nicht unterstützt".to_string()
+    })?;
+    let bytes = STANDARD
+        .decode(base64)
+        .map_err(|_| "Bilddaten aus der Zwischenablage sind ungültig".to_string())?;
+    validate_image_size(bytes.len() as u64)?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default();
+    write_asset(
+        &document_path,
+        &format!("image-{timestamp}.{extension}"),
+        &bytes,
+        &state,
+    )
+}
+
+#[tauri::command]
 pub fn read_local_asset(
     document_path: String,
     asset_path: String,
@@ -232,6 +363,9 @@ pub fn load_session(app: AppHandle, state: State<'_, AppState>) -> Result<Sessio
     for path in &cleaned.open_paths {
         let _ = state.authorize_file(Path::new(path));
     }
+    for path in &cleaned.recent_paths {
+        let _ = state.authorize_file(Path::new(path));
+    }
     Ok(cleaned)
 }
 
@@ -262,6 +396,153 @@ fn read_document_from_path(path: &Path) -> Result<DocumentPayload, String> {
         revision: revision_for_path(path)?,
         source,
     })
+}
+
+fn collect_workspace_markdown(
+    root: &Path,
+    directory: &Path,
+    files: &mut Vec<WorkspaceFile>,
+) -> Result<(), String> {
+    let entries = fs::read_dir(directory)
+        .map_err(|error| format!("Ordner kann nicht gelesen werden: {error}"))?;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name.starts_with('.') {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        let path = entry.path();
+        if file_type.is_dir() {
+            collect_workspace_markdown(root, &path, files)?;
+        } else if file_type.is_file() && is_markdown(&path) {
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| "Relativer Dateipfad konnte nicht ermittelt werden".to_string())?;
+            files.push(WorkspaceFile {
+                path: path_string(&path)?,
+                name,
+                relative_path: path_string(relative)?,
+            });
+        }
+    }
+    Ok(())
+}
+
+fn write_asset(
+    document_path: &str,
+    original_name: &str,
+    bytes: &[u8],
+    state: &AppState,
+) -> Result<ImportedAsset, String> {
+    let document = state.ensure_document_access(Path::new(document_path))?;
+    let parent = document
+        .parent()
+        .ok_or_else(|| "Dokumentordner ist ungültig".to_string())?;
+    let asset_directory = parent.join("assets");
+    if asset_directory.exists() {
+        let metadata = fs::symlink_metadata(&asset_directory)
+            .map_err(|error| format!("Asset-Ordner kann nicht geprüft werden: {error}"))?;
+        if metadata.file_type().is_symlink() {
+            return Err("Der assets-Ordner darf keine symbolische Verknüpfung sein".into());
+        }
+        if !metadata.is_dir() {
+            return Err("assets existiert bereits, ist aber kein Ordner".into());
+        }
+    } else {
+        fs::create_dir(&asset_directory)
+            .map_err(|error| format!("assets-Ordner kann nicht erstellt werden: {error}"))?;
+    }
+    let canonical_assets = asset_directory
+        .canonicalize()
+        .map_err(|error| format!("assets-Ordner ist nicht verfügbar: {error}"))?;
+    if !canonical_assets.starts_with(parent) {
+        return Err("Asset-Ziel liegt außerhalb des Dokumentordners".into());
+    }
+
+    let extension = Path::new(original_name)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_lowercase)
+        .filter(|extension| IMAGE_EXTENSIONS.contains(&extension.as_str()))
+        .ok_or_else(|| "Dieses Bildformat wird nicht unterstützt".to_string())?;
+    let stem = Path::new(original_name)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .map(sanitize_file_stem)
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or_else(|| "bild".into());
+    let (target, file_name) = available_asset_path(&canonical_assets, &stem, &extension);
+    atomic_create(&target, bytes)?;
+    Ok(ImportedAsset {
+        relative_path: format!("assets/{}", percent_encode_component(&file_name)),
+        display_name: stem,
+    })
+}
+
+fn available_asset_path(directory: &Path, stem: &str, extension: &str) -> (PathBuf, String) {
+    for suffix in 1_u32.. {
+        let file_name = if suffix == 1 {
+            format!("{stem}.{extension}")
+        } else {
+            format!("{stem}-{suffix}.{extension}")
+        };
+        let path = directory.join(&file_name);
+        if !path.exists() {
+            return (path, file_name);
+        }
+    }
+    unreachable!()
+}
+
+fn sanitize_file_stem(value: &str) -> String {
+    let mut output = String::new();
+    let mut separator = false;
+    for character in value.chars() {
+        if character.is_alphanumeric() || matches!(character, '-' | '_') {
+            output.push(character);
+            separator = false;
+        } else if !separator && !output.is_empty() {
+            output.push('-');
+            separator = true;
+        }
+    }
+    output.trim_matches('-').to_string()
+}
+
+fn percent_encode_component(value: &str) -> String {
+    let mut output = String::new();
+    for byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+            output.push(*byte as char);
+        } else {
+            output.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    output
+}
+
+fn extension_for_clipboard_mime(mime_type: &str) -> Option<&'static str> {
+    match mime_type.to_ascii_lowercase().as_str() {
+        "image/png" => Some("png"),
+        "image/jpeg" | "image/jpg" => Some("jpg"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        "image/avif" => Some("avif"),
+        _ => None,
+    }
+}
+
+fn validate_image_size(size: u64) -> Result<(), String> {
+    if size > MAX_IMAGE_BYTES {
+        Err("Das Bild ist größer als 30 MB".into())
+    } else {
+        Ok(())
+    }
 }
 
 fn revision_for_path(path: &Path) -> Result<FileRevision, String> {
@@ -326,6 +607,22 @@ fn atomic_write_new(path: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
+fn atomic_create(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| "Dateipfad hat keinen übergeordneten Ordner".to_string())?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|error| format!("Temporäre Datei kann nicht erstellt werden: {error}"))?;
+    temporary
+        .write_all(bytes)
+        .and_then(|_| temporary.as_file_mut().sync_all())
+        .map_err(|error| format!("Datei kann nicht geschrieben werden: {error}"))?;
+    temporary
+        .persist_noclobber(path)
+        .map_err(|error| format!("Datei existiert bereits: {}", error.error))?;
+    Ok(())
+}
+
 fn session_file(app: &AppHandle) -> Result<PathBuf, String> {
     app.path()
         .app_config_dir()
@@ -351,6 +648,17 @@ fn clean_session(mut session: SessionState) -> SessionState {
         .filter(|path| path.is_file() && is_markdown(path))
         .filter_map(|path| path_string(&path).ok())
         .filter(|path| seen.insert(path.clone()))
+        .collect();
+
+    let mut recent_seen = HashSet::new();
+    session.recent_paths = session
+        .recent_paths
+        .into_iter()
+        .filter_map(|path| Path::new(&path).canonicalize().ok())
+        .filter(|path| path.is_file() && is_markdown(path))
+        .filter_map(|path| path_string(&path).ok())
+        .filter(|path| recent_seen.insert(path.clone()))
+        .take(MAX_RECENT_PATHS)
         .collect();
 
     if session
@@ -404,6 +712,7 @@ fn path_string(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn recognizes_supported_extensions_case_insensitively() {
@@ -430,5 +739,132 @@ mod tests {
         assert!(cleaned.workspace_root.is_none());
         assert!(cleaned.open_paths.is_empty());
         assert!(cleaned.active_path.is_none());
+    }
+
+    #[test]
+    fn cleans_and_limits_recent_markdown_paths() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let markdown = directory.path().join("notiz.md");
+        let text = directory.path().join("notiz.txt");
+        fs::write(&markdown, "Marky").expect("markdown fixture");
+        fs::write(&text, "Marky").expect("text fixture");
+
+        let cleaned = clean_session(SessionState {
+            recent_paths: vec![
+                path_string(&markdown).expect("markdown path"),
+                path_string(&markdown).expect("duplicate markdown path"),
+                path_string(&text).expect("text path"),
+                "/definitely/missing.md".into(),
+            ],
+            ..SessionState::default()
+        });
+
+        let canonical = markdown.canonicalize().expect("canonical markdown path");
+        assert_eq!(cleaned.recent_paths, vec![path_string(&canonical).unwrap()]);
+    }
+
+    #[test]
+    fn finds_workspace_markdown_without_hidden_entries() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let nested = directory.path().join("Kapitel");
+        let hidden = directory.path().join(".intern");
+        fs::create_dir(&nested).expect("nested directory");
+        fs::create_dir(&hidden).expect("hidden directory");
+        fs::write(directory.path().join("Start.md"), "Start").expect("root markdown");
+        fs::write(nested.join("Text.markdown"), "Text").expect("nested markdown");
+        fs::write(nested.join("Text.txt"), "Text").expect("other file");
+        fs::write(hidden.join("Geheim.md"), "Geheim").expect("hidden markdown");
+
+        let mut files = Vec::new();
+        collect_workspace_markdown(directory.path(), directory.path(), &mut files)
+            .expect("workspace scan");
+        files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+
+        assert_eq!(
+            files
+                .iter()
+                .map(|file| file.relative_path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Kapitel/Text.markdown", "Start.md"]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_scan_does_not_follow_directory_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let outside = tempfile::tempdir().expect("outside directory");
+        fs::write(outside.path().join("Fremd.md"), "Fremd").expect("outside markdown");
+        symlink(outside.path(), directory.path().join("Verknuepfung")).expect("directory symlink");
+
+        let mut files = Vec::new();
+        collect_workspace_markdown(directory.path(), directory.path(), &mut files)
+            .expect("workspace scan");
+
+        assert!(files.is_empty());
+    }
+
+    #[test]
+    fn asset_names_are_sanitized_encoded_and_never_reused() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        fs::write(directory.path().join("mein-bild.png"), b"existing").expect("existing asset");
+
+        assert_eq!(sanitize_file_stem("  mein bild!?  "), "mein-bild");
+        assert_eq!(
+            percent_encode_component("grünes bild.png"),
+            "gr%C3%BCnes%20bild.png"
+        );
+        let (path, name) = available_asset_path(directory.path(), "mein-bild", "png");
+        assert_eq!(name, "mein-bild-2.png");
+        assert_eq!(path, directory.path().join(&name));
+    }
+
+    #[test]
+    fn atomic_creation_does_not_overwrite_existing_files() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("notiz.md");
+        fs::write(&path, "Vorher").expect("existing file");
+
+        assert!(atomic_create(&path, b"Nachher").is_err());
+        assert_eq!(fs::read_to_string(path).unwrap(), "Vorher");
+    }
+
+    #[test]
+    fn clipboard_formats_are_restricted() {
+        assert_eq!(extension_for_clipboard_mime("image/png"), Some("png"));
+        assert_eq!(extension_for_clipboard_mime("IMAGE/JPEG"), Some("jpg"));
+        assert_eq!(extension_for_clipboard_mime("image/svg+xml"), None);
+        assert_eq!(extension_for_clipboard_mime("text/plain"), None);
+    }
+
+    #[test]
+    fn image_size_limit_includes_exactly_thirty_megabytes() {
+        assert!(validate_image_size(MAX_IMAGE_BYTES).is_ok());
+        assert!(validate_image_size(MAX_IMAGE_BYTES + 1).is_err());
+    }
+
+    #[test]
+    fn invalid_utf8_documents_are_rejected() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("notiz.md");
+        fs::write(&path, [0xff, 0xfe]).expect("invalid UTF-8 fixture");
+
+        assert!(read_document_from_path(&path).is_err());
+    }
+
+    #[test]
+    fn atomic_writes_change_the_file_revision() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("notiz.md");
+        fs::write(&path, "Vorher").expect("existing document");
+        let before = revision_for_path(&path).expect("initial revision");
+
+        atomic_write(&path, b"Nachher").expect("atomic write");
+        let after = revision_for_path(&path).expect("updated revision");
+
+        assert_ne!(before.hash, after.hash);
+        assert_eq!(fs::read_to_string(path).unwrap(), "Nachher");
     }
 }

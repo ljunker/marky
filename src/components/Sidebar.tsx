@@ -4,22 +4,33 @@ import {
   ChevronRight,
   FileImage,
   FileText,
+  Files,
   Folder,
   FolderOpen,
+  ListTree,
   X,
 } from "lucide-react";
 import { errorMessage, listDirectory } from "../api";
-import type { DirectoryEntry, DocumentState } from "../types";
+import type {
+  DirectoryEntry,
+  DocumentState,
+  OutlineItem,
+  SidebarMode,
+} from "../types";
 import { isDirty } from "../types";
 
 interface SidebarProps {
   documents: DocumentState[];
-  activePath: string | null;
+  activeDocumentId: string | null;
   workspaceRoot: string | null;
+  mode: SidebarMode;
+  outline: OutlineItem[];
   expandedDirectories: Set<string>;
   refreshToken: number;
-  onActivate: (path: string) => void;
-  onClose: (path: string) => void;
+  onActivate: (id: string) => void;
+  onClose: (id: string) => void;
+  onModeChange: (mode: SidebarMode) => void;
+  onRevealOutline: (offset: number) => void;
   onOpenMarkdown: (path: string) => void;
   onToggleDirectory: (path: string) => void;
   onError: (message: string) => void;
@@ -27,30 +38,80 @@ interface SidebarProps {
 
 export function Sidebar({
   documents,
-  activePath,
+  activeDocumentId,
   workspaceRoot,
+  mode,
+  outline,
   expandedDirectories,
   refreshToken,
   onActivate,
   onClose,
+  onModeChange,
+  onRevealOutline,
   onOpenMarkdown,
   onToggleDirectory,
   onError,
 }: SidebarProps) {
   return (
     <aside className="sidebar" aria-label="Dateien">
+      <div className="sidebar-tabs" role="tablist" aria-label="Sidebar-Ansicht">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === "files"}
+          className={mode === "files" ? "active" : ""}
+          onClick={() => onModeChange("files")}
+        >
+          <Files size={14} />
+          Dateien
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === "outline"}
+          className={mode === "outline" ? "active" : ""}
+          onClick={() => onModeChange("outline")}
+        >
+          <ListTree size={14} />
+          Gliederung
+        </button>
+      </div>
+      {mode === "outline" ? (
+        <div className="outline-panel" role="tabpanel">
+          {outline.length === 0 ? (
+            <p className="sidebar-placeholder">Keine Überschriften im Dokument</p>
+          ) : (
+            <ul className="outline-list">
+              {outline.map((item, index) => (
+                <li key={`${item.offset}-${index}`}>
+                  <button
+                    type="button"
+                    style={{ paddingLeft: `${10 + (item.level - 1) * 13}px` }}
+                    title={`Zeile ${item.line}: ${item.text}`}
+                    onClick={() => onRevealOutline(item.offset)}
+                  >
+                    <span className="outline-level">H{item.level}</span>
+                    <span>{item.text}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : (
+        <div className="sidebar-files" role="tabpanel">
       <SidebarSection title="Offene Dateien" count={documents.length}>
         {documents.length === 0 ? (
           <p className="sidebar-placeholder">Noch keine Dateien geöffnet</p>
         ) : (
           <ul className="file-list">
             {documents.map((document) => (
-              <li key={document.path}>
+              <li key={document.id}>
                 <button
                   type="button"
-                  className={`file-row ${activePath === document.path ? "active" : ""}`}
-                  onClick={() => onActivate(document.path)}
-                  title={document.path}
+                  className={`file-row ${activeDocumentId === document.id ? "active" : ""}`}
+                  onClick={() => onActivate(document.id)}
+                  title={document.path ?? document.name}
                 >
                   <FileText size={15} aria-hidden="true" />
                   <span className="file-name">{document.name}</span>
@@ -70,13 +131,13 @@ export function Sidebar({
                     aria-label={`${document.name} schließen`}
                     onClick={(event) => {
                       event.stopPropagation();
-                      onClose(document.path);
+                      onClose(document.id);
                     }}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         event.stopPropagation();
-                        onClose(document.path);
+                        onClose(document.id);
                       }
                     }}
                   >
@@ -103,6 +164,8 @@ export function Sidebar({
           <p className="sidebar-placeholder">Kein Ordner ausgewählt</p>
         )}
       </SidebarSection>
+        </div>
+      )}
     </aside>
   );
 }
