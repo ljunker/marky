@@ -1,0 +1,138 @@
+name: macOS-Release erstellen
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: marky-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Marky bauen und veröffentlichen
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Node.js einrichten
+        uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Rust einrichten
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Version aus Cargo.toml lesen
+        id: version
+        shell: bash
+        run: |
+          VERSION="$(
+            cargo metadata \
+              --manifest-path src-tauri/Cargo.toml \
+              --format-version 1 \
+              --no-deps |
+            node -e '
+              let input = "";
+              process.stdin.on("data", chunk => input += chunk);
+              process.stdin.on("end", () => {
+                const metadata = JSON.parse(input);
+                const manifestSuffix = "/src-tauri/Cargo.toml";
+                const package = metadata.packages.find(entry =>
+                  entry.manifest_path.endsWith(manifestSuffix)
+                );
+                if (!package) {
+                  console.error("Marky-Paket in Cargo-Metadaten nicht gefunden.");
+                  process.exit(1);
+                }
+                process.stdout.write(package.version);
+              });
+            '
+          )"
+
+          if [[ -z "$VERSION" ]]; then
+            echo "::error::In src-tauri/Cargo.toml wurde keine Version gefunden."
+            exit 1
+          fi
+
+          TAG="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Der Tag $TAG existiert bereits. Erhöhe zuerst die Version in src-tauri/Cargo.toml."
+            exit 1
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Release-Version: $VERSION"
+
+      - name: Frontend-Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Tests ausführen
+        run: |
+          npm run check
+          npm test
+          cargo test --manifest-path src-tauri/Cargo.toml
+
+      - name: Marky.app bauen
+        run: npm run tauri build -- --bundles app --target aarch64-apple-darwin
+
+      - name: App prüfen und verpacken
+        id: package
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          APP_PATH="src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Marky.app"
+          INFO_PLIST="$APP_PATH/Contents/Info.plist"
+          ASSET_NAME="Marky-$VERSION-macos-arm64.zip"
+
+          if [[ ! -d "$APP_PATH" ]]; then
+            echo "::error::Das erwartete App-Bundle wurde nicht gefunden: $APP_PATH"
+            exit 1
+          fi
+
+          BUNDLE_VERSION="$(
+            /usr/libexec/PlistBuddy \
+              -c "Print :CFBundleShortVersionString" \
+              "$INFO_PLIST"
+          )"
+          if [[ "$BUNDLE_VERSION" != "$VERSION" ]]; then
+            echo "::error::Bundle-Version $BUNDLE_VERSION stimmt nicht mit Cargo-Version $VERSION überein."
+            exit 1
+          fi
+
+          ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$ASSET_NAME"
+          echo "asset=$ASSET_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: GitHub-Release erstellen
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          ASSET: ${{ steps.package.outputs.asset }}
+        run: |
+          RELEASE_FLAGS=()
+          if [[ "$VERSION" == *-* ]]; then
+            RELEASE_FLAGS+=(--prerelease)
+          else
+            RELEASE_FLAGS+=(--latest)
+          fi
+
+          gh release create "$TAG" "$ASSET" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Marky $VERSION" \
+            --generate-notes \
+            "${RELEASE_FLAGS[@]}"

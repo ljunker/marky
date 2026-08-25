@@ -30,3 +30,9 @@ npm run tauri build -- --bundles app
 Das Bundle liegt anschließend unter `src-tauri/target/release/bundle/macos/Marky.app`. Kopiere es bei Bedarf nach `/Applications` und starte es einmal. Danach wird Marky im Finder für `.md`- und `.markdown`-Dateien unter „Öffnen mit“ angeboten.
 
 Die lokale Version ist nicht mit einer Apple-Developer-ID signiert oder notarisiert.
+
+## GitHub-Release erstellen
+
+Die Release-Version wird ausschließlich unter `package.version` in `src-tauri/Cargo.toml` gepflegt. Nach dem Commit und Push der gewünschten Version lässt sich unter **Actions → macOS-Release erstellen → Run workflow** ein Release manuell starten.
+
+Der Workflow führt die Tests aus, baut `Marky.app` auf macOS 26 für Apple Silicon und erstellt den Tag `v<Version>`. Die App wird als `Marky-<Version>-macos-arm64.zip` an das GitHub-Release angehängt. Existiert der Versions-Tag bereits, bricht der Workflow ab, damit ein vorhandenes Release nicht überschrieben wird.
