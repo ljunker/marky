@@ -137,7 +137,8 @@ interface WorkspaceTreeProps {
 }
 
 function WorkspaceTree(props: WorkspaceTreeProps) {
-  const rootName = props.root.split("/").filter(Boolean).at(-1) ?? props.root;
+  const pathSegments = props.root.split("/").filter(Boolean);
+  const rootName = pathSegments[pathSegments.length - 1] ?? props.root;
   return (
     <div className="workspace-tree">
       <div className="tree-root" title={props.root}>
