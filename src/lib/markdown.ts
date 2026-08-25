@@ -1,0 +1,119 @@
+import DOMPurify from "dompurify";
+import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
+import css from "highlight.js/lib/languages/css";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import markdownLanguage from "highlight.js/lib/languages/markdown";
+import python from "highlight.js/lib/languages/python";
+import rust from "highlight.js/lib/languages/rust";
+import typescript from "highlight.js/lib/languages/typescript";
+import xml from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
+import MarkdownIt, {
+  type MarkdownIt as MarkdownItInstance,
+  type RendererRule,
+} from "markdown-it";
+import taskLists from "markdown-it-task-lists";
+
+const transparentPixel =
+  "data:image/gif;base64,R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=";
+
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("shell", bash);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("html", xml);
+hljs.registerLanguage("xml", xml);
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("js", javascript);
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("markdown", markdownLanguage);
+hljs.registerLanguage("md", markdownLanguage);
+hljs.registerLanguage("python", python);
+hljs.registerLanguage("py", python);
+hljs.registerLanguage("rust", rust);
+hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("ts", typescript);
+hljs.registerLanguage("yaml", yaml);
+hljs.registerLanguage("yml", yaml);
+
+const markdown: MarkdownItInstance = new MarkdownIt({
+  html: true,
+  linkify: true,
+  breaks: false,
+  highlight(source, language): string {
+    if (language && hljs.getLanguage(language)) {
+      try {
+        return `<pre class="hljs"><code>${hljs.highlight(source, { language }).value}</code></pre>`;
+      } catch {
+        // Fallback below keeps invalid language declarations harmless.
+      }
+    }
+    return `<pre class="hljs"><code>${markdown.utils.escapeHtml(source)}</code></pre>`;
+  },
+});
+
+markdown.use(taskLists, { enabled: false, label: true, labelAfter: true });
+
+const defaultImageRenderer = markdown.renderer.rules.image;
+const imageRenderer: RendererRule = (
+  tokens,
+  index,
+  options,
+  environment,
+  renderer,
+) => {
+  const token = tokens[index];
+  const source = String(token.attrGet("src") ?? "");
+  if (isRelativeAsset(source)) {
+    token.attrSet("data-local-src", source);
+    token.attrSet("src", transparentPixel);
+  }
+  if (defaultImageRenderer) {
+    return defaultImageRenderer(tokens, index, options, environment, renderer);
+  }
+  return renderer.renderToken(tokens, index, options);
+};
+markdown.renderer.rules.image = imageRenderer;
+
+const defaultLinkOpenRenderer = markdown.renderer.rules.link_open;
+const linkRenderer: RendererRule = (
+  tokens,
+  index,
+  options,
+  environment,
+  renderer,
+) => {
+  tokens[index].attrSet("rel", "noreferrer noopener");
+  tokens[index].attrSet("target", "_blank");
+  if (defaultLinkOpenRenderer) {
+    return defaultLinkOpenRenderer(tokens, index, options, environment, renderer);
+  }
+  return renderer.renderToken(tokens, index, options);
+};
+markdown.renderer.rules.link_open = linkRenderer;
+
+export function isRelativeAsset(source: string): boolean {
+  return (
+    source.length > 0 &&
+    !source.startsWith("/") &&
+    !source.startsWith("#") &&
+    !/^[a-z][a-z\d+.-]*:/i.test(source)
+  );
+}
+
+export function renderMarkdown(source: string): string {
+  return DOMPurify.sanitize(markdown.render(source), {
+    USE_PROFILES: { html: true },
+    ADD_ATTR: [
+      "checked",
+      "data-local-src",
+      "disabled",
+      "rel",
+      "target",
+      "type",
+    ],
+    FORBID_TAGS: ["script", "style", "iframe", "object", "embed", "form"],
+    FORBID_ATTR: ["srcdoc"],
+  });
+}

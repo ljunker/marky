@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+
+# Frontend build output and caches
+dist/
+dist-ssr/
+*.tsbuildinfo
+.vite/
+.vitest/
+coverage/
+test-results/
+playwright-report/
+
+# Rust / Tauri build output
+/src-tauri/target/
+/src-tauri/gen/schemas/
+**/*.rs.bk
+
+# Local configuration and environment variables
+.env
+.env.*
+!.env.example
+*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDEs and editors
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*~
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
