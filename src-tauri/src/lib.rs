@@ -34,12 +34,26 @@ fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
     let find = MenuItemBuilder::with_id("find", "Suchen …")
         .accelerator("CmdOrCtrl+F")
         .build(app)?;
+    let workspace_search = MenuItemBuilder::with_id("workspace-search", "Im Ordner suchen …")
+        .accelerator("CmdOrCtrl+Shift+F")
+        .build(app)?;
     let toggle_sidebar = MenuItemBuilder::with_id("toggle-sidebar", "Sidebar ein-/ausblenden")
         .accelerator("CmdOrCtrl+Alt+S")
+        .build(app)?;
+    let toggle_focus = MenuItemBuilder::with_id("toggle-focus", "Fokusmodus")
+        .accelerator("CmdOrCtrl+Shift+Enter")
+        .build(app)?;
+    let toggle_typewriter = MenuItemBuilder::with_id("toggle-typewriter", "Schreibmaschinenmodus")
+        .accelerator("CmdOrCtrl+Alt+T")
+        .build(app)?;
+    let settings = MenuItemBuilder::with_id("settings", "Einstellungen …")
+        .accelerator("CmdOrCtrl+Comma")
         .build(app)?;
 
     let app_menu = SubmenuBuilder::new(app, "Marky")
         .about(None)
+        .separator()
+        .item(&settings)
         .separator()
         .services()
         .separator()
@@ -69,9 +83,12 @@ fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
         .select_all()
         .separator()
         .item(&find)
+        .item(&workspace_search)
         .build()?;
     let view_menu = SubmenuBuilder::new(app, "Darstellung")
         .item(&toggle_sidebar)
+        .item(&toggle_focus)
+        .item(&toggle_typewriter)
         .separator()
         .fullscreen()
         .build()?;
@@ -94,7 +111,11 @@ fn install_menu(app: &mut tauri::App) -> tauri::Result<()> {
                 | "save"
                 | "save-as"
                 | "find"
+                | "workspace-search"
                 | "toggle-sidebar"
+                | "toggle-focus"
+                | "toggle-typewriter"
+                | "settings"
         ) {
             let _ = app.emit("menu-action", identifier);
         }
@@ -122,17 +143,25 @@ pub fn run() {
             commands::choose_markdown_files,
             commands::choose_workspace,
             commands::choose_document_save_path,
+            commands::choose_preview_css,
+            commands::delete_recovery_snapshot,
             commands::drain_open_paths,
             commands::import_image_file,
             commands::list_directory,
             commands::list_workspace_markdown,
             commands::load_session,
+            commands::load_recovery,
+            commands::load_settings,
             commands::read_document,
             commands::read_local_asset,
+            commands::read_preview_css,
             commands::save_document,
             commands::save_document_as,
             commands::save_image_bytes,
+            commands::save_recovery_snapshot,
             commands::save_session,
+            commands::save_settings,
+            commands::search_workspace,
         ])
         .build(tauri::generate_context!())
         .expect("Marky konnte nicht gestartet werden");

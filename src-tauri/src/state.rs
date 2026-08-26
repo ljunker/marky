@@ -12,6 +12,7 @@ use crate::models::FileSystemChange;
 struct AccessState {
     authorized_roots: HashSet<PathBuf>,
     standalone_files: HashSet<PathBuf>,
+    preview_css_files: HashSet<PathBuf>,
     pending_save_targets: HashSet<PathBuf>,
     pending_drop_files: HashSet<PathBuf>,
     pending_open_paths: Vec<PathBuf>,
@@ -82,6 +83,40 @@ impl AppState {
             watch_path(&mut inner, parent, RecursiveMode::NonRecursive)?;
         }
         Ok(canonical)
+    }
+
+    pub fn authorize_preview_css(&self, path: &Path) -> Result<PathBuf, String> {
+        let canonical = path
+            .canonicalize()
+            .map_err(|error| format!("CSS-Datei kann nicht geöffnet werden: {error}"))?;
+        if !canonical.is_file() {
+            return Err("Der ausgewählte Pfad ist keine CSS-Datei".into());
+        }
+
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Interner Zustand ist gesperrt".to_string())?;
+        inner.preview_css_files.insert(canonical.clone());
+        if let Some(parent) = canonical.parent() {
+            watch_path(&mut inner, parent, RecursiveMode::NonRecursive)?;
+        }
+        Ok(canonical)
+    }
+
+    pub fn ensure_preview_css_access(&self, path: &Path) -> Result<PathBuf, String> {
+        let canonical = path
+            .canonicalize()
+            .map_err(|error| format!("CSS-Datei ist nicht verfügbar: {error}"))?;
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| "Interner Zustand ist gesperrt".to_string())?;
+        if inner.preview_css_files.contains(&canonical) {
+            Ok(canonical)
+        } else {
+            Err("Zugriff auf diese CSS-Datei wurde nicht freigegeben".into())
+        }
     }
 
     pub fn authorize_save_target(&self, path: &Path) -> Result<PathBuf, String> {

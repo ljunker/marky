@@ -33,7 +33,12 @@ import {
   createSmartUrlPasteEdit,
 } from "../lib/editorInput";
 import { createMarkdownEdit, type MarkdownAction } from "../lib/formatting";
-import type { DocumentState, ImageDropPayload, ImportedAsset } from "../types";
+import type {
+  DocumentState,
+  ImageDropPayload,
+  ImportedAsset,
+  ScrollAnchor,
+} from "../types";
 
 const formatGroups = [
   [
@@ -63,12 +68,16 @@ const formatGroups = [
 
 export interface CodeEditorHandle {
   revealOffset: (offset: number) => void;
+  revealRange: (from: number, to: number) => void;
+  scrollToSource: (anchor: ScrollAnchor) => void;
+  replaceSource: (source: string) => void;
 }
 
 interface CodeEditorProps {
   document: DocumentState;
   darkMode: boolean;
   findRequest: number;
+  typewriterMode: boolean;
   onChange: (source: string) => void;
   onPositionChange: (
     selectionFrom: number,
@@ -76,6 +85,7 @@ interface CodeEditorProps {
     scrollTop: number,
   ) => void;
   onEnsureSaved: () => Promise<string | null>;
+  onScrollAnchor: (anchor: ScrollAnchor) => void;
   onError: (message: string) => void;
 }
 
@@ -85,9 +95,11 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       document,
       darkMode,
       findRequest,
+      typewriterMode,
       onChange,
       onPositionChange,
       onEnsureSaved,
+      onScrollAnchor,
       onError,
     },
     forwardedRef,
@@ -109,6 +121,42 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
           effects: EditorView.scrollIntoView(position, { y: "center" }),
         });
         view.focus();
+      },
+      revealRange(from: number, to: number) {
+        const view = viewRef.current;
+        if (!view) return;
+        const safeFrom = Math.min(Math.max(0, from), view.state.doc.length);
+        const safeTo = Math.min(Math.max(safeFrom, to), view.state.doc.length);
+        view.dispatch({
+          selection: EditorSelection.range(safeFrom, safeTo),
+          effects: EditorView.scrollIntoView(safeFrom, { y: "center" }),
+        });
+        view.focus();
+      },
+      scrollToSource(anchor: ScrollAnchor) {
+        const view = viewRef.current;
+        if (!view) return;
+        const lineNumber = Math.min(
+          view.state.doc.lines,
+          Math.max(1, anchor.line),
+        );
+        const line = view.state.doc.line(lineNumber);
+        view.dispatch({ effects: EditorView.scrollIntoView(line.from, { y: "start" }) });
+        if (anchor.fraction > 0) {
+          requestAnimationFrame(() => {
+            const block = view.lineBlockAt(line.from);
+            view.scrollDOM.scrollTop += block.height * anchor.fraction;
+          });
+        }
+      },
+      replaceSource(source: string) {
+        const view = viewRef.current;
+        if (!view) return;
+        view.dispatch({
+          changes: { from: 0, to: view.state.doc.length, insert: source },
+          selection: EditorSelection.cursor(Math.min(source.length, view.state.selection.main.head)),
+          userEvent: "input.merge",
+        });
       },
     }), []);
 
@@ -219,6 +267,16 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
             const scrollTop = update.view.scrollDOM.scrollTop;
             positionRef.current.scrollTop = scrollTop;
             onPositionChange(selection.from, selection.to, scrollTop);
+            if (typewriterMode) {
+              const head = selection.head;
+              requestAnimationFrame(() => {
+                if (viewRef.current === update.view) {
+                  update.view.dispatch({
+                    effects: EditorView.scrollIntoView(head, { y: "center" }),
+                  });
+                }
+              });
+            }
           }
         }),
         EditorView.domEventHandlers({
@@ -230,6 +288,8 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
               selection.to,
               positionRef.current.scrollTop,
             );
+            const anchor = sourceAnchorForEditor(view);
+            if (anchor) onScrollAnchor(anchor);
           },
           paste: (event, view) => {
             const files = [...(event.clipboardData?.files ?? [])].filter((file) =>
@@ -255,7 +315,13 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
           },
         }),
       ],
-      [importClipboardImages, onPositionChange, performAction],
+      [
+        importClipboardImages,
+        onPositionChange,
+        onScrollAnchor,
+        performAction,
+        typewriterMode,
+      ],
     );
 
     useEffect(() => {
@@ -394,4 +460,21 @@ async function fileToBase64(file: File): Promise<string> {
   const separator = dataUrl.indexOf(",");
   if (separator < 0) throw new Error("Bilddaten sind ungültig");
   return dataUrl.slice(separator + 1);
+}
+
+function sourceAnchorForEditor(view: EditorView): ScrollAnchor | null {
+  const scrollBounds = view.scrollDOM.getBoundingClientRect();
+  const contentBounds = view.contentDOM.getBoundingClientRect();
+  const position = view.posAtCoords({
+    x: contentBounds.left + 2,
+    y: scrollBounds.top + 1,
+  });
+  if (position === null) return null;
+  const line = view.state.doc.lineAt(position);
+  const coordinates = view.coordsAtPos(line.from);
+  const block = view.lineBlockAt(line.from);
+  const fraction = coordinates
+    ? Math.min(0.999, Math.max(0, (scrollBounds.top - coordinates.top) / block.height))
+    : 0;
+  return { line: line.number, fraction };
 }

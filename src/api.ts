@@ -1,13 +1,19 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AssetData,
+  AppSettings,
   DirectoryEntry,
   DocumentPayload,
   FileRevision,
   ImportedAsset,
+  PreviewCssPayload,
+  RecoverySnapshot,
   SaveResult,
   SessionState,
   WorkspaceFile,
+  WorkspaceSearchOptions,
+  WorkspaceSearchOverride,
+  WorkspaceSearchResponse,
 } from "./types";
 
 export const chooseMarkdownFiles = (): Promise<string[]> =>
@@ -78,6 +84,35 @@ export const loadSession = (): Promise<SessionState> => invoke("load_session");
 
 export const saveSession = (session: SessionState): Promise<void> =>
   invoke("save_session", { session });
+
+export const loadRecovery = (): Promise<RecoverySnapshot[]> =>
+  invoke("load_recovery");
+
+export const saveRecoverySnapshot = (
+  snapshot: RecoverySnapshot,
+): Promise<void> => invoke("save_recovery_snapshot", { snapshot });
+
+export const deleteRecoverySnapshot = (id: string): Promise<void> =>
+  invoke("delete_recovery_snapshot", { id });
+
+export const searchWorkspace = (
+  root: string,
+  query: string,
+  options: WorkspaceSearchOptions,
+  overrides: WorkspaceSearchOverride[],
+): Promise<WorkspaceSearchResponse> =>
+  invoke("search_workspace", { root, query, options, overrides });
+
+export const loadSettings = (): Promise<AppSettings> => invoke("load_settings");
+
+export const saveSettings = (settings: AppSettings): Promise<AppSettings> =>
+  invoke("save_settings", { settings });
+
+export const choosePreviewCss = (): Promise<PreviewCssPayload | null> =>
+  invoke("choose_preview_css");
+
+export const readPreviewCss = (path: string): Promise<PreviewCssPayload> =>
+  invoke("read_preview_css", { path });
 
 export function errorMessage(error: unknown): string {
   if (typeof error === "string") return error;

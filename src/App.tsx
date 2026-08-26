@@ -5,9 +5,12 @@ import {
   FilePlus,
   FileUp,
   FolderOpen,
+  Focus,
   PanelLeftClose,
   PanelLeftOpen,
   Save,
+  Settings,
+  TextCursorInput,
 } from "lucide-react";
 import {
   authorizeDocument,
@@ -15,33 +18,49 @@ import {
   chooseDocumentSavePath,
   chooseMarkdownFiles,
   chooseWorkspace,
+  choosePreviewCss,
+  deleteRecoverySnapshot,
   drainOpenPaths,
   errorMessage,
   listWorkspaceMarkdown,
+  loadRecovery,
   loadSession,
+  loadSettings,
   readDocument,
+  readPreviewCss,
   saveDocument,
   saveDocumentAs,
+  saveRecoverySnapshot,
   saveSession,
+  saveSettings,
 } from "./api";
 import { ActionDialog } from "./components/ActionDialog";
 import { CodeEditor, type CodeEditorHandle } from "./components/CodeEditor";
-import { MarkdownPreview } from "./components/MarkdownPreview";
+import { ConflictResolver } from "./components/ConflictResolver";
+import {
+  MarkdownPreview,
+  type MarkdownPreviewHandle,
+} from "./components/MarkdownPreview";
+import { PreviewSettingsDialog } from "./components/PreviewSettingsDialog";
 import { QuickOpen } from "./components/QuickOpen";
 import { Sidebar } from "./components/Sidebar";
 import { computeTextStats, extractOutline } from "./lib/markdown";
 import type { QuickOpenCandidate } from "./lib/quickOpen";
+import { recoverySnapshotFor, sameRecoveryContent } from "./lib/recovery";
 import type {
   DialogSpec,
+  AppSettings,
   DocumentPayload,
   DocumentState,
   FileSystemChange,
+  RecoverySnapshot,
+  ScrollAnchor,
   SessionState,
   SidebarMode,
   WorkspaceFile,
+  WorkspaceSearchHit,
 } from "./types";
 import { isDirty } from "./types";
-import "highlight.js/styles/github.css";
 import "./App.css";
 
 interface QueuedDialog {
@@ -49,7 +68,30 @@ interface QueuedDialog {
   resolve: (answer: string) => void;
 }
 
+interface ConflictState {
+  documentId: string;
+  name: string;
+  external: DocumentPayload;
+  ownSource: string;
+  notice?: string;
+  resolve: (result: ConflictResolution) => void;
+}
+
+type ConflictResolution =
+  | { action: "cancel" }
+  | { action: "load"; external: DocumentPayload }
+  | { action: "merge"; external: DocumentPayload; source: string };
+
 const MAX_RECENT_PATHS = 30;
+const DEFAULT_SETTINGS: AppSettings = {
+  preview: {
+    fontSize: 15,
+    contentWidth: null,
+    codeTheme: "system-github",
+    scrollSyncEnabled: true,
+  },
+  customCssPath: null,
+};
 
 const newDocumentId = (): string => crypto.randomUUID();
 
@@ -79,11 +121,18 @@ function App() {
   const [editorRatio, setEditorRatio] = useState(0.5);
   const [treeRefreshToken, setTreeRefreshToken] = useState(0);
   const [findRequest, setFindRequest] = useState(0);
+  const [searchFocusRequest, setSearchFocusRequest] = useState(0);
   const [dialog, setDialog] = useState<DialogSpec | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [quickOpenVisible, setQuickOpenVisible] = useState(false);
   const [quickOpenLoading, setQuickOpenLoading] = useState(false);
   const [workspaceFiles, setWorkspaceFiles] = useState<WorkspaceFile[]>([]);
+  const [appSettings, setAppSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
+  const [customCss, setCustomCss] = useState("");
+  const [settingsVisible, setSettingsVisible] = useState(false);
+  const [focusMode, setFocusMode] = useState(false);
+  const [typewriterMode, setTypewriterMode] = useState(false);
+  const [conflict, setConflict] = useState<ConflictState | null>(null);
   const darkMode = useDarkMode();
 
   const documentsRef = useRef<DocumentState[]>([]);
@@ -96,6 +145,16 @@ function App() {
   const changedPathsRef = useRef(new Set<string>());
   const changeTimerRef = useRef<number | null>(null);
   const editorRef = useRef<CodeEditorHandle>(null);
+  const previewRef = useRef<MarkdownPreviewHandle>(null);
+  const settingsRef = useRef(appSettings);
+  const recoveryTimersRef = useRef(new Map<string, number>());
+  const recoveryStateRef = useRef(new Map<string, RecoverySnapshot>());
+  const scrollLockRef = useRef({ editorUntil: 0, previewUntil: 0 });
+  const pendingRevealRef = useRef<{ id: string; from: number; to: number } | null>(null);
+
+  useEffect(() => {
+    settingsRef.current = appSettings;
+  }, [appSettings]);
 
   const replaceDocuments = useCallback((next: DocumentState[]) => {
     documentsRef.current = next;
@@ -144,6 +203,60 @@ function App() {
     setDialog(dialogQueueRef.current[0]?.spec ?? null);
   }, []);
 
+  const resolveDocumentConflict = useCallback((
+    document: DocumentState,
+    external: DocumentPayload,
+  ): Promise<ConflictResolution> => new Promise((resolve) => {
+    setConflict({
+      documentId: document.id,
+      name: document.name,
+      external,
+      ownSource: document.source,
+      resolve,
+    });
+  }), []);
+
+  const finishConflict = useCallback((result: ConflictResolution) => {
+    setConflict((current) => {
+      if (current && result.action === "cancel") {
+        const document = documentsRef.current.find(
+          (item) => item.id === current.documentId,
+        );
+        if (document && isDirty(document)) {
+          const snapshot = recoverySnapshotFor(document, Date.now());
+          void saveRecoverySnapshot(snapshot)
+            .then(() => recoveryStateRef.current.set(document.id, snapshot))
+            .catch((error) => showToast(errorMessage(error)));
+        }
+      }
+      current?.resolve(result);
+      return null;
+    });
+  }, [showToast]);
+
+  const acceptConflict = useCallback(async () => {
+    const current = conflict;
+    if (!current) return;
+    try {
+      const latest = await readDocument(current.external.path);
+      if (latest.revision.hash !== current.external.revision.hash) {
+        setConflict((value) => value ? {
+          ...value,
+          external: latest,
+          notice: "Die externe Datei wurde erneut geändert. Der Vergleich wurde aktualisiert.",
+        } : null);
+        return;
+      }
+      finishConflict({
+        action: "merge",
+        external: latest,
+        source: current.ownSource,
+      });
+    } catch (error) {
+      showToast(errorMessage(error));
+    }
+  }, [conflict, finishConflict, showToast]);
+
   const activateDocument = useCallback((id: string) => {
     const document = documentsRef.current.find((item) => item.id === id);
     if (!document) return;
@@ -171,7 +284,7 @@ function App() {
   }, [setActiveDocumentId, updateDocuments]);
 
   const openDocument = useCallback(
-    async (requestedPath: string, needsAuthorization = false) => {
+    async (requestedPath: string, needsAuthorization = false): Promise<string | null> => {
       let path = requestedPath;
       try {
         if (needsAuthorization) path = await authorizeDocument(path);
@@ -180,9 +293,9 @@ function App() {
         );
         if (existing) {
           activateDocument(existing.id);
-          return;
+          return existing.id;
         }
-        if (openingPathsRef.current.has(path)) return;
+        if (openingPathsRef.current.has(path)) return null;
         openingPathsRef.current.add(path);
         const payload = await readDocument(path);
         const duplicate = documentsRef.current.find(
@@ -190,15 +303,17 @@ function App() {
         );
         if (duplicate) {
           activateDocument(duplicate.id);
-          return;
+          return duplicate.id;
         }
         const document = toDocumentState(payload);
         updateDocuments((current) => [...current, document]);
         setActiveDocumentId(document.id);
         touchRecent(payload.path);
+        return document.id;
       } catch (error) {
         setRecentPaths((current) => current.filter((item) => item !== path));
         showToast(errorMessage(error));
+        return null;
       } finally {
         openingPathsRef.current.delete(path);
       }
@@ -229,6 +344,10 @@ function App() {
 
   const applyPayload = useCallback(
     (id: string, payload: DocumentPayload, keepSource?: string) => {
+      if (keepSource === undefined) {
+        recoveryStateRef.current.delete(id);
+        void deleteRecoverySnapshot(id);
+      }
       updateDocuments((current) =>
         current.map((document) =>
           document.id === id
@@ -240,6 +359,7 @@ function App() {
                 savedSource: payload.source,
                 revision: payload.revision,
                 missing: false,
+                recovered: false,
               }
             : document,
         ),
@@ -253,7 +373,9 @@ function App() {
       const document = documentsRef.current.find((item) => item.id === id);
       if (!document) return null;
       try {
-        const suggestedName = document.path ? document.name : `${document.name}.md`;
+        const suggestedName = document.path || /\.(?:md|markdown)$/i.test(document.name)
+          ? document.name
+          : `${document.name}.md`;
         const path = await chooseDocumentSavePath(suggestedName);
         if (!path) return null;
         const duplicate = documentsRef.current.find(
@@ -301,10 +423,13 @@ function App() {
                     revision: result.revision,
                     savedSource: sourceToSave,
                     missing: false,
+                    recovered: false,
                   }
                 : item,
             ),
           );
+          recoveryStateRef.current.delete(id);
+          void deleteRecoverySnapshot(id);
           touchRecent(document.path);
           showToast(`${document.name} wurde gespeichert`);
           return document.path;
@@ -321,53 +446,59 @@ function App() {
           return null;
         }
 
-        const choice = await ask({
-          title: "Speicherkonflikt",
-          message: `${document.name} wurde außerhalb von Marky geändert.`,
-          detail:
-            "Du kannst die externe Fassung laden oder deine aktuelle Fassung bewusst darüber speichern.",
-          buttons: [
-            { id: "cancel", label: "Abbrechen" },
-            { id: "load", label: "Extern laden" },
-            { id: "overwrite", label: "Eigene Fassung speichern", emphasis: "primary" },
-          ],
-        });
-
-        if (choice === "load") {
-          applyPayload(id, external);
-          return external.path;
+        let candidateSource = sourceToSave;
+        for (;;) {
+          const resolution = await resolveDocumentConflict(
+            { ...document, source: candidateSource },
+            external,
+          );
+          if (resolution.action === "cancel") return null;
+          if (resolution.action === "load") {
+            applyPayload(id, resolution.external);
+            return resolution.external.path;
+          }
+          candidateSource = resolution.source;
+          const overwrite = await saveDocument(
+            document.path,
+            resolution.external.revision,
+            candidateSource,
+          );
+          if (overwrite.status === "saved") {
+            updateDocuments((current) =>
+              current.map((item) =>
+                item.id === id
+                  ? {
+                      ...item,
+                      source: candidateSource,
+                      revision: overwrite.revision,
+                      savedSource: candidateSource,
+                      missing: false,
+                      recovered: false,
+                    }
+                  : item,
+              ),
+            );
+            recoveryStateRef.current.delete(id);
+            void deleteRecoverySnapshot(id);
+            touchRecent(document.path);
+            showToast(`${document.name} wurde gespeichert`);
+            return document.path;
+          }
+          external = await readDocument(document.path);
         }
-        if (choice !== "overwrite") return null;
-        const overwrite = await saveDocument(
-          document.path,
-          external.revision,
-          sourceToSave,
-        );
-        if (overwrite.status !== "saved") {
-          showToast("Die Datei wurde erneut geändert. Bitte versuche es noch einmal.");
-          return null;
-        }
-        updateDocuments((current) =>
-          current.map((item) =>
-            item.id === id
-              ? {
-                  ...item,
-                  revision: overwrite.revision,
-                  savedSource: sourceToSave,
-                  missing: false,
-                }
-              : item,
-          ),
-        );
-        touchRecent(document.path);
-        showToast(`${document.name} wurde gespeichert`);
-        return document.path;
       } catch (error) {
         showToast(errorMessage(error));
         return null;
       }
     },
-    [applyPayload, ask, saveAsById, showToast, touchRecent, updateDocuments],
+    [
+      applyPayload,
+      resolveDocumentConflict,
+      saveAsById,
+      showToast,
+      touchRecent,
+      updateDocuments,
+    ],
   );
 
   const ensureDocumentPath = useCallback(
@@ -396,6 +527,11 @@ function App() {
         if (choice === "cancel") return;
         if (choice === "save" && !(await saveById(id))) return;
       }
+      try {
+        await deleteRecoverySnapshot(id);
+      } catch (error) {
+        showToast(errorMessage(error));
+      }
       const index = documentsRef.current.findIndex((item) => item.id === id);
       const nextDocuments = documentsRef.current.filter((item) => item.id !== id);
       replaceDocuments(nextDocuments);
@@ -404,7 +540,7 @@ function App() {
         setActiveDocumentId(next?.id ?? null);
       }
     },
-    [ask, replaceDocuments, saveById, setActiveDocumentId],
+    [ask, replaceDocuments, saveById, setActiveDocumentId, showToast],
   );
 
   const confirmAllDirty = useCallback(async (): Promise<boolean> => {
@@ -420,9 +556,15 @@ function App() {
       });
       if (choice === "cancel") return false;
       if (choice === "save" && !(await saveById(document.id))) return false;
+      try {
+        await deleteRecoverySnapshot(document.id);
+      } catch (error) {
+        showToast(errorMessage(error));
+        return false;
+      }
     }
     return true;
-  }, [ask, saveById]);
+  }, [ask, saveById, showToast]);
 
   const processExternalChanges = useCallback(async () => {
     const paths = [...changedPathsRef.current];
@@ -447,20 +589,78 @@ function App() {
         showToast(`${document.name} wurde extern aktualisiert`);
         continue;
       }
-      const choice = await ask({
-        title: "Datei extern geändert",
-        message: `${document.name} wurde außerhalb von Marky geändert.`,
-        detail: "Welche Fassung möchtest du weiter bearbeiten?",
-        buttons: [
-          { id: "cancel", label: "Abbrechen" },
-          { id: "keep", label: "Eigene Fassung behalten" },
-          { id: "load", label: "Extern laden", emphasis: "primary" },
-        ],
-      });
-      if (choice === "load") applyPayload(document.id, external);
-      if (choice === "keep") applyPayload(document.id, external, document.source);
+      const resolution = await resolveDocumentConflict(document, external);
+      if (resolution.action === "load") {
+        applyPayload(document.id, resolution.external);
+      }
+      if (resolution.action === "merge") {
+        applyPayload(document.id, resolution.external, resolution.source);
+      }
     }
-  }, [applyPayload, ask, showToast, updateDocuments]);
+  }, [applyPayload, resolveDocumentConflict, showToast, updateDocuments]);
+
+  const persistAppSettings = useCallback(async (next: AppSettings) => {
+    try {
+      const cleaned = await saveSettings(next);
+      settingsRef.current = cleaned;
+      setAppSettings(cleaned);
+    } catch (error) {
+      showToast(errorMessage(error));
+    }
+  }, [showToast]);
+
+  const selectCustomCss = useCallback(async () => {
+    try {
+      const payload = await choosePreviewCss();
+      if (!payload) return;
+      setCustomCss(payload.source);
+      await persistAppSettings({
+        ...settingsRef.current,
+        customCssPath: payload.path,
+      });
+    } catch (error) {
+      showToast(errorMessage(error));
+    }
+  }, [persistAppSettings, showToast]);
+
+  const reloadCustomCss = useCallback(async () => {
+    const path = settingsRef.current.customCssPath;
+    if (!path) return;
+    try {
+      setCustomCss((await readPreviewCss(path)).source);
+      showToast("Vorschau-CSS wurde neu geladen");
+    } catch (error) {
+      showToast(errorMessage(error));
+    }
+  }, [showToast]);
+
+  const removeCustomCss = useCallback(() => {
+    setCustomCss("");
+    void persistAppSettings({ ...settingsRef.current, customCssPath: null });
+  }, [persistAppSettings]);
+
+  const openSearchHit = useCallback(async (hit: WorkspaceSearchHit) => {
+    const id = await openDocument(hit.path);
+    if (!id) return;
+    pendingRevealRef.current = { id, from: hit.from, to: hit.to };
+    setActiveDocumentId(id);
+  }, [openDocument, setActiveDocumentId]);
+
+  const syncPreviewFromEditor = useCallback((anchor: ScrollAnchor) => {
+    if (!settingsRef.current.preview.scrollSyncEnabled) return;
+    const now = performance.now();
+    if (now < scrollLockRef.current.editorUntil) return;
+    scrollLockRef.current.previewUntil = now + 120;
+    previewRef.current?.scrollToSource(anchor);
+  }, []);
+
+  const syncEditorFromPreview = useCallback((anchor: ScrollAnchor) => {
+    if (!settingsRef.current.preview.scrollSyncEnabled) return;
+    const now = performance.now();
+    if (now < scrollLockRef.current.previewUntil) return;
+    scrollLockRef.current.editorUntil = now + 120;
+    editorRef.current?.scrollToSource(anchor);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -476,12 +676,27 @@ function App() {
         if (payload === "save-as" && activeId) void saveAsById(activeId);
         if (payload === "find") setFindRequest((value) => value + 1);
         if (payload === "toggle-sidebar") setSidebarCollapsed((value) => !value);
+        if (payload === "workspace-search") {
+          setFocusMode(false);
+          setSidebarCollapsed(false);
+          setSidebarMode("search");
+          setSearchFocusRequest((value) => value + 1);
+        }
+        if (payload === "toggle-focus") setFocusMode((value) => !value);
+        if (payload === "toggle-typewriter") setTypewriterMode((value) => !value);
+        if (payload === "settings") setSettingsVisible(true);
       }));
       unlisteners.push(await listen<string[]>("open-paths", ({ payload }) => {
         if (!initializedRef.current) return;
         for (const path of payload) void openDocument(path, true);
       }));
       unlisteners.push(await listen<FileSystemChange>("file-system-change", ({ payload }) => {
+        const cssPath = settingsRef.current.customCssPath;
+        if (cssPath && payload.paths.includes(cssPath)) {
+          void readPreviewCss(cssPath)
+            .then((css) => setCustomCss(css.source))
+            .catch((error) => showToast(errorMessage(error)));
+        }
         payload.paths.forEach((path) => changedPathsRef.current.add(path));
         if (changeTimerRef.current) window.clearTimeout(changeTimerRef.current);
         changeTimerRef.current = window.setTimeout(
@@ -500,7 +715,20 @@ function App() {
 
       try {
         const session = await loadSession();
+        const [settings, recovery] = await Promise.all([
+          loadSettings(),
+          loadRecovery(),
+        ]);
         if (cancelled) return;
+        settingsRef.current = settings;
+        setAppSettings(settings);
+        if (settings.customCssPath) {
+          try {
+            setCustomCss((await readPreviewCss(settings.customCssPath)).source);
+          } catch (error) {
+            showToast(errorMessage(error));
+          }
+        }
         setWorkspaceRoot(session.workspaceRoot);
         setRecentPaths(session.recentPaths);
         setExpandedDirectories(new Set(session.expandedDirectories));
@@ -516,11 +744,41 @@ function App() {
             // Missing and invalid documents were already removed from the session.
           }
         }
-        replaceDocuments(restored);
-        const restoredActive = restored.find(
+        const recoveredPaths = new Set(
+          recovery.flatMap((snapshot) => snapshot.path ? [snapshot.path] : []),
+        );
+        const recoveredDocuments = recovery.map((snapshot): DocumentState => ({
+          id: snapshot.id,
+          path: snapshot.path,
+          name: snapshot.name,
+          source: snapshot.source,
+          revision: snapshot.revision,
+          savedSource: snapshot.savedSource,
+          selectionFrom: snapshot.selectionFrom,
+          selectionTo: snapshot.selectionTo,
+          scrollTop: snapshot.scrollTop,
+          recovered: true,
+        }));
+        recoveryStateRef.current = new Map(
+          recovery.map((snapshot) => [snapshot.id, snapshot]),
+        );
+        const allRestored = [
+          ...restored.filter((document) =>
+            !document.path || !recoveredPaths.has(document.path)),
+          ...recoveredDocuments,
+        ];
+        replaceDocuments(allRestored);
+        const restoredActive = allRestored.find(
           (document) => document.path === session.activePath,
-        ) ?? restored[0];
+        )
+          ?? recoveredDocuments[0]
+          ?? allRestored[0];
         setActiveDocumentId(restoredActive?.id ?? null);
+        if (recoveredDocuments.length > 0) {
+          showToast(
+            `${recoveredDocuments.length} ungespeicherte${recoveredDocuments.length === 1 ? "s Dokument" : " Dokumente"} wiederhergestellt`,
+          );
+        }
       } catch (error) {
         showToast(errorMessage(error));
       }
@@ -588,6 +846,72 @@ function App() {
   ]);
 
   useEffect(() => {
+    if (!initializedRef.current) return;
+    const presentIds = new Set(documents.map((document) => document.id));
+    for (const [id, timer] of recoveryTimersRef.current) {
+      if (!presentIds.has(id)) {
+        window.clearTimeout(timer);
+        recoveryTimersRef.current.delete(id);
+        recoveryStateRef.current.delete(id);
+      }
+    }
+
+    for (const document of documents) {
+      const existingTimer = recoveryTimersRef.current.get(document.id);
+      if (!isDirty(document)) {
+        if (existingTimer) window.clearTimeout(existingTimer);
+        recoveryTimersRef.current.delete(document.id);
+        if (recoveryStateRef.current.delete(document.id)) {
+          void deleteRecoverySnapshot(document.id);
+        }
+        continue;
+      }
+      const snapshot = recoverySnapshotFor(document, Date.now());
+      const previous = recoveryStateRef.current.get(document.id);
+      if (previous && sameRecoveryContent(previous, snapshot)) continue;
+      if (existingTimer) window.clearTimeout(existingTimer);
+      const timer = window.setTimeout(() => {
+        recoveryTimersRef.current.delete(document.id);
+        void saveRecoverySnapshot(snapshot)
+          .then(() => recoveryStateRef.current.set(document.id, snapshot))
+          .catch((error) => showToast(errorMessage(error)));
+      }, 1000);
+      recoveryTimersRef.current.set(document.id, timer);
+    }
+  }, [documents, showToast]);
+
+  useEffect(() => () => {
+    recoveryTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+  }, []);
+
+  useEffect(() => {
+    if (!conflict) return;
+    const document = documentsRef.current.find(
+      (item) => item.id === conflict.documentId,
+    );
+    if (!document) return;
+    const timer = window.setTimeout(() => {
+      const snapshot = recoverySnapshotFor(
+        { ...document, source: conflict.ownSource },
+        Date.now(),
+      );
+      void saveRecoverySnapshot(snapshot)
+        .then(() => recoveryStateRef.current.set(document.id, snapshot))
+        .catch((error) => showToast(errorMessage(error)));
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [conflict, showToast]);
+
+  useEffect(() => {
+    if (!focusMode) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setFocusMode(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [focusMode]);
+
+  useEffect(() => {
     if (!quickOpenVisible || !workspaceRoot) {
       if (!workspaceRoot) setWorkspaceFiles([]);
       return;
@@ -613,6 +937,17 @@ function App() {
     () => documents.find((document) => document.id === activeDocumentId) ?? null,
     [activeDocumentId, documents],
   );
+
+  useEffect(() => {
+    const pending = pendingRevealRef.current;
+    if (!pending || pending.id !== activeDocumentId) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (pendingRevealRef.current !== pending) return;
+      editorRef.current?.revealRange(pending.from, pending.to);
+      pendingRevealRef.current = null;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [activeDocumentId, activeDocument?.source]);
 
   const quickOpenCandidates = useMemo<QuickOpenCandidate[]>(() => {
     const byPath = new Map<string, WorkspaceFile>();
@@ -705,7 +1040,7 @@ function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${focusMode ? " focus-mode" : ""}${typewriterMode ? " typewriter-mode" : ""}`}>
       <header className="toolbar">
         <button
           type="button"
@@ -737,13 +1072,40 @@ function App() {
           <Save size={16} />
           Speichern
         </button>
+        <button
+          type="button"
+          className={focusMode ? "mode-active" : ""}
+          title="Fokusmodus (⇧⌘↵)"
+          onClick={() => setFocusMode((value) => !value)}
+        >
+          <Focus size={16} />
+          Fokus
+        </button>
+        <button
+          type="button"
+          className={typewriterMode ? "mode-active" : ""}
+          title="Schreibmaschinenmodus (⌥⌘T)"
+          onClick={() => setTypewriterMode((value) => !value)}
+        >
+          <TextCursorInput size={16} />
+          Schreibmaschine
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          aria-label="Vorschau-Einstellungen"
+          title="Vorschau-Einstellungen (⌘,)"
+          onClick={() => setSettingsVisible(true)}
+        >
+          <Settings size={16} />
+        </button>
         <div className="toolbar-document" title={activeDocument?.path ?? activeDocument?.name}>
           {activeDocument?.path ?? activeDocument?.name ?? "Bereit"}
         </div>
       </header>
 
       <main className="workspace">
-        {!sidebarCollapsed && (
+        {!sidebarCollapsed && !focusMode && (
           <>
             <div className="sidebar-container" style={{ width: sidebarWidth }}>
               <Sidebar
@@ -754,11 +1116,13 @@ function App() {
                 outline={outline}
                 expandedDirectories={expandedDirectories}
                 refreshToken={treeRefreshToken}
+                searchFocusRequest={searchFocusRequest}
                 onActivate={activateDocument}
                 onClose={(id) => void closeDocument(id)}
                 onModeChange={setSidebarMode}
                 onRevealOutline={(offset) => editorRef.current?.revealOffset(offset)}
                 onOpenMarkdown={(path) => void openDocument(path)}
+                onOpenSearchHit={(hit) => void openSearchHit(hit)}
                 onToggleDirectory={(path) =>
                   setExpandedDirectories((current) => {
                     const next = new Set(current);
@@ -784,7 +1148,10 @@ function App() {
             <section className="editor-pane" style={{ flexBasis: `${editorRatio * 100}%` }}>
               <div className="pane-header">
                 <span>MARKDOWN</span>
-                {isDirty(activeDocument) && <span>Ungespeichert</span>}
+                <span>
+                  {activeDocument.recovered && "Wiederhergestellt · "}
+                  {isDirty(activeDocument) && "Ungespeichert"}
+                </span>
               </div>
               <CodeEditor
                 ref={editorRef}
@@ -792,6 +1159,7 @@ function App() {
                 document={activeDocument}
                 darkMode={darkMode}
                 findRequest={findRequest}
+                typewriterMode={typewriterMode}
                 onChange={(source) =>
                   updateDocuments((current) =>
                     current.map((document) =>
@@ -818,6 +1186,7 @@ function App() {
                   );
                 }}
                 onEnsureSaved={() => ensureDocumentPath(activeDocument.id)}
+                onScrollAnchor={syncPreviewFromEditor}
                 onError={showToast}
               />
             </section>
@@ -830,11 +1199,30 @@ function App() {
             <section className="preview-pane">
               <div className="pane-header">
                 <span>VORSCHAU</span>
-                <span>Live</span>
+                <button
+                  type="button"
+                  className={appSettings.preview.scrollSyncEnabled ? "active" : ""}
+                  aria-pressed={appSettings.preview.scrollSyncEnabled}
+                  title="Scroll-Synchronisierung"
+                  onClick={() => void persistAppSettings({
+                    ...appSettings,
+                    preview: {
+                      ...appSettings.preview,
+                      scrollSyncEnabled: !appSettings.preview.scrollSyncEnabled,
+                    },
+                  })}
+                >
+                  Sync {appSettings.preview.scrollSyncEnabled ? "an" : "aus"}
+                </button>
               </div>
               <MarkdownPreview
+                ref={previewRef}
                 documentPath={activeDocument.path}
                 source={activeDocument.source}
+                settings={appSettings.preview}
+                customCss={customCss}
+                darkMode={darkMode}
+                onScrollAnchor={syncEditorFromPreview}
               />
             </section>
           </div>
@@ -875,7 +1263,7 @@ function App() {
             <span>{totalStats.readingMinutes} Min. Lesezeit</span>
           </>
         ) : (
-          <span>Marky 0.2.0</span>
+          <span>Marky 0.3.0</span>
         )}
       </footer>
 
@@ -891,6 +1279,35 @@ function App() {
       />
       {toast && <div className="toast" role="status">{toast}</div>}
       <ActionDialog dialog={dialog} onAnswer={answerDialog} />
+      <PreviewSettingsDialog
+        open={settingsVisible}
+        settings={appSettings}
+        onClose={() => setSettingsVisible(false)}
+        onSave={(settings) => {
+          setSettingsVisible(false);
+          void persistAppSettings(settings);
+        }}
+        onChooseCss={() => void selectCustomCss()}
+        onReloadCss={() => void reloadCustomCss()}
+        onRemoveCss={removeCustomCss}
+      />
+      {conflict && (
+        <ConflictResolver
+          name={conflict.name}
+          externalSource={conflict.external.source}
+          ownSource={conflict.ownSource}
+          darkMode={darkMode}
+          notice={conflict.notice}
+          onOwnSourceChange={(source) => setConflict((current) =>
+            current ? { ...current, ownSource: source } : null)}
+          onCancel={() => finishConflict({ action: "cancel" })}
+          onLoadExternal={() => finishConflict({
+            action: "load",
+            external: conflict.external,
+          })}
+          onAccept={() => void acceptConflict()}
+        />
+      )}
     </div>
   );
 }

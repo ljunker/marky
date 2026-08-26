@@ -1,6 +1,6 @@
 [package]
 name = "marky"
-version = "0.2.0"
+version = "0.3.0"
 description = "Ein fokussierter Markdown-Editor für macOS"
 authors = ["Marky"]
 edition = "2024"
@@ -28,3 +28,4 @@ blake3 = "1"
 mime_guess = "2"
 notify = "8"
 tempfile = "3"
+regex = "1"

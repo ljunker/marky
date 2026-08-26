@@ -1,10 +1,12 @@
-# Marky 0.2.0
+# Marky 0.3.0
 
 Marky ist ein fokussierter Markdown-Editor für macOS 26. Die App kombiniert einen Dateibaum, einen Raw-Editor mit Syntaxhervorhebung und eine Live-Vorschau in einem Fenster.
 
 Über der Texteingabe bietet eine kompakte Werkzeugleiste Formatierungen für Fett, Kursiv, Durchgestrichen, Inline-Code, Überschriften, Listen, Aufgabenlisten, Zitate, Links, Bilder und Tabellen. Markierter Text wird direkt mit der passenden Markdown-Syntax umschlossen; `⌘B` und `⌘I` funktionieren zusätzlich als Tastenkürzel.
 
-Version 0.2 ergänzt unbenannte Dokumente mit „Speichern unter“, eine Schnellöffnen-Palette, eine live aktualisierte Gliederung, Text- und Auswahlstatistiken sowie den Import gezogener oder eingefügter Bilder in einen lokalen `assets`-Ordner. Listen werden beim Drücken von Enter intelligent fortgeführt und markierte Texte lassen sich durch Einfügen einer Webadresse direkt verlinken.
+Version 0.3 schützt ungespeicherte Arbeit zusätzlich mit automatischer Wiederherstellung. Externe Änderungen werden in einer zweispaltigen Konfliktansicht zusammengeführt. Die ordnerweite Volltextsuche berücksichtigt auch noch nicht gespeicherte Editorinhalte und springt direkt zum Treffer.
+
+Editor und isolierte Shadow-DOM-Vorschau lassen sich bidirektional scrollen. Für konzentriertes Schreiben gibt es Fokus- und Schreibmaschinenmodus. Schriftgröße, Inhaltsbreite und Code-Theme der Vorschau sind global einstellbar; eine sicher geprüfte lokale CSS-Datei wird bei Änderungen live neu geladen.
 
 ## Tastenkürzel
 
@@ -17,6 +19,10 @@ Version 0.2 ergänzt unbenannte Dokumente mit „Speichern unter“, eine Schnel
 | `⌘S` | Speichern |
 | `⇧⌘S` | Speichern unter |
 | `⌘F` | Im Dokument suchen |
+| `⇧⌘F` | Im Arbeitsordner suchen |
+| `⇧⌘↵` | Fokusmodus ein-/ausschalten |
+| `⌥⌘T` | Schreibmaschinenmodus ein-/ausschalten |
+| `⌘,` | Vorschau-Einstellungen |
 | `⌘B` | Auswahl fett formatieren |
 | `⌘I` | Auswahl kursiv formatieren |
 

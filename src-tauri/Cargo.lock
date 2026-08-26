@@ -2103,12 +2103,13 @@ dependencies = [
 
 [[package]]
 name = "marky"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.22.1",
  "blake3",
  "mime_guess",
  "notify",
+ "regex",
  "serde",
  "serde_json",
  "tauri",

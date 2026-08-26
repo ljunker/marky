@@ -8,6 +8,7 @@ import {
   Folder,
   FolderOpen,
   ListTree,
+  Search,
   X,
 } from "lucide-react";
 import { errorMessage, listDirectory } from "../api";
@@ -16,8 +17,10 @@ import type {
   DocumentState,
   OutlineItem,
   SidebarMode,
+  WorkspaceSearchHit,
 } from "../types";
 import { isDirty } from "../types";
+import { WorkspaceSearch } from "./WorkspaceSearch";
 
 interface SidebarProps {
   documents: DocumentState[];
@@ -27,11 +30,13 @@ interface SidebarProps {
   outline: OutlineItem[];
   expandedDirectories: Set<string>;
   refreshToken: number;
+  searchFocusRequest: number;
   onActivate: (id: string) => void;
   onClose: (id: string) => void;
   onModeChange: (mode: SidebarMode) => void;
   onRevealOutline: (offset: number) => void;
   onOpenMarkdown: (path: string) => void;
+  onOpenSearchHit: (hit: WorkspaceSearchHit) => void;
   onToggleDirectory: (path: string) => void;
   onError: (message: string) => void;
 }
@@ -44,11 +49,13 @@ export function Sidebar({
   outline,
   expandedDirectories,
   refreshToken,
+  searchFocusRequest,
   onActivate,
   onClose,
   onModeChange,
   onRevealOutline,
   onOpenMarkdown,
+  onOpenSearchHit,
   onToggleDirectory,
   onError,
 }: SidebarProps) {
@@ -75,8 +82,27 @@ export function Sidebar({
           <ListTree size={14} />
           Gliederung
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={mode === "search"}
+          className={mode === "search" ? "active" : ""}
+          onClick={() => onModeChange("search")}
+        >
+          <Search size={14} />
+          Suche
+        </button>
       </div>
-      {mode === "outline" ? (
+      {mode === "search" ? (
+        <WorkspaceSearch
+          workspaceRoot={workspaceRoot}
+          documents={documents}
+          refreshToken={refreshToken}
+          focusRequest={searchFocusRequest}
+          onOpenHit={onOpenSearchHit}
+          onError={onError}
+        />
+      ) : mode === "outline" ? (
         <div className="outline-panel" role="tabpanel">
           {outline.length === 0 ? (
             <p className="sidebar-placeholder">Keine Überschriften im Dokument</p>

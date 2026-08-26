@@ -55,6 +55,37 @@ const markdown: MarkdownItInstance = new MarkdownIt({
 });
 
 markdown.use(taskLists, { enabled: false, label: true, labelAfter: true });
+markdown.core.ruler.after("block", "marky-source-lines", (state) => {
+  for (const token of state.tokens) {
+    if (token.map && token.block && token.nesting !== -1) {
+      token.attrSet("data-source-line", String(token.map[0] + 1));
+    }
+  }
+});
+
+markdown.renderer.rules.fence = (tokens, index) => {
+  const token = tokens[index];
+  const language = token.info.trim().split(/\s+/, 1)[0];
+  const className = language
+    ? ` class="language-${markdown.utils.escapeHtml(language)}"`
+    : "";
+  let highlighted = markdown.utils.escapeHtml(token.content);
+  if (language && hljs.getLanguage(language)) {
+    try {
+      highlighted = hljs.highlight(token.content, { language }).value;
+    } catch {
+      // Invalid language input remains escaped plain text.
+    }
+  }
+  const line = token.map ? token.map[0] + 1 : 1;
+  return `<pre class="hljs" data-source-line="${line}"><code${className}>${highlighted}</code></pre>\n`;
+};
+
+markdown.renderer.rules.code_block = (tokens, index) => {
+  const token = tokens[index];
+  const line = token.map ? token.map[0] + 1 : 1;
+  return `<pre class="hljs" data-source-line="${line}"><code>${markdown.utils.escapeHtml(token.content)}</code></pre>\n`;
+};
 
 const defaultImageRenderer = markdown.renderer.rules.image;
 const imageRenderer: RendererRule = (
@@ -109,6 +140,7 @@ export function renderMarkdown(source: string): string {
     ADD_ATTR: [
       "checked",
       "data-local-src",
+      "data-source-line",
       "disabled",
       "rel",
       "target",

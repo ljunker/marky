@@ -22,6 +22,7 @@ export interface DocumentState {
   selectionTo: number;
   scrollTop: number;
   missing?: boolean;
+  recovered?: boolean;
 }
 
 export type EntryKind = "directory" | "markdown" | "image";
@@ -37,6 +38,47 @@ export interface WorkspaceFile {
   path: string;
   name: string;
   relativePath: string;
+}
+
+export interface RecoverySnapshot {
+  id: string;
+  path: string | null;
+  name: string;
+  source: string;
+  savedSource: string | null;
+  revision: FileRevision | null;
+  selectionFrom: number;
+  selectionTo: number;
+  scrollTop: number;
+  updatedAtMillis: number;
+}
+
+export interface WorkspaceSearchOptions {
+  caseSensitive: boolean;
+  wholeWord: boolean;
+}
+
+export interface WorkspaceSearchOverride {
+  path: string;
+  source: string;
+}
+
+export interface WorkspaceSearchHit {
+  path: string;
+  name: string;
+  relativePath: string;
+  line: number;
+  column: number;
+  from: number;
+  to: number;
+  context: string;
+}
+
+export interface WorkspaceSearchResponse {
+  hits: WorkspaceSearchHit[];
+  skippedLarge: number;
+  skippedInvalidUtf8: number;
+  truncated: boolean;
 }
 
 export interface ImportedAsset {
@@ -78,7 +120,32 @@ export interface SessionState {
   editorRatio: number;
 }
 
-export type SidebarMode = "files" | "outline";
+export type SidebarMode = "files" | "outline" | "search";
+
+export type CodeTheme = "system-github" | "github-dark" | "atom-one-dark";
+
+export interface PreviewSettings {
+  fontSize: number;
+  contentWidth: number | null;
+  codeTheme: CodeTheme;
+  scrollSyncEnabled: boolean;
+}
+
+export interface AppSettings {
+  preview: PreviewSettings;
+  customCssPath: string | null;
+}
+
+export interface PreviewCssPayload {
+  path: string;
+  source: string;
+  revision: FileRevision;
+}
+
+export interface ScrollAnchor {
+  line: number;
+  fraction: number;
+}
 
 export interface FileSystemChange {
   paths: string[];

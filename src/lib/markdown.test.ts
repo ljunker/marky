@@ -22,10 +22,11 @@ fn main() {}
 ~~~
 `);
 
-    expect(html).toContain("<h1>Überschrift</h1>");
-    expect(html).toContain("<table>");
+    expect(html).toContain('<h1 data-source-line="2">Überschrift</h1>');
+    expect(html).toContain('<table data-source-line="4">');
     expect(html).toContain("task-list-item");
     expect(html).toContain("hljs");
+    expect(html).toContain('<pre class="hljs" data-source-line="10">');
   });
 
   it("extrahiert Überschriften außerhalb von Codeblöcken", () => {
