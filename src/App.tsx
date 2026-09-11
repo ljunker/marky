@@ -47,6 +47,7 @@ import { Sidebar } from "./components/Sidebar";
 import { computeTextStats, extractOutline } from "./lib/markdown";
 import type { QuickOpenCandidate } from "./lib/quickOpen";
 import { recoverySnapshotFor, sameRecoveryContent } from "./lib/recovery";
+import { normalizeWikiLinkPath } from "./lib/wikiLinks";
 import type {
   DialogSpec,
   AppSettings,
@@ -334,6 +335,7 @@ function App() {
     try {
       const path = await chooseWorkspace();
       if (!path) return;
+      setWorkspaceFiles([]);
       setWorkspaceRoot(path);
       setExpandedDirectories(new Set());
       setTreeRefreshToken((value) => value + 1);
@@ -912,8 +914,9 @@ function App() {
   }, [focusMode]);
 
   useEffect(() => {
-    if (!quickOpenVisible || !workspaceRoot) {
-      if (!workspaceRoot) setWorkspaceFiles([]);
+    if (!workspaceRoot) {
+      setWorkspaceFiles([]);
+      setQuickOpenLoading(false);
       return;
     }
     let cancelled = false;
@@ -923,7 +926,10 @@ function App() {
         if (!cancelled) setWorkspaceFiles(files);
       })
       .catch((error) => {
-        if (!cancelled) showToast(errorMessage(error));
+        if (!cancelled) {
+          setWorkspaceFiles([]);
+          showToast(errorMessage(error));
+        }
       })
       .finally(() => {
         if (!cancelled) setQuickOpenLoading(false);
@@ -931,7 +937,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, [quickOpenVisible, showToast, treeRefreshToken, workspaceRoot]);
+  }, [showToast, treeRefreshToken, workspaceRoot]);
 
   const activeDocument = useMemo(
     () => documents.find((document) => document.id === activeDocumentId) ?? null,
@@ -978,6 +984,25 @@ function App() {
       recentRank: recentRanks.get(file.path) ?? null,
     }));
   }, [documents, recentPaths, workspaceFiles]);
+
+  const wikiLinkTargets = useMemo(
+    () => new Map(
+      workspaceFiles.map((file) => [
+        normalizeWikiLinkPath(file.relativePath),
+        file.path,
+      ]),
+    ),
+    [workspaceFiles],
+  );
+  const openWikiLink = useCallback((relativePath: string) => {
+    if (!workspaceRoot) return;
+    const path = wikiLinkTargets.get(normalizeWikiLinkPath(relativePath));
+    if (!path) {
+      showToast(`Wiki-Link-Ziel nicht gefunden: ${relativePath}`);
+      return;
+    }
+    void openDocument(path);
+  }, [openDocument, showToast, wikiLinkTargets, workspaceRoot]);
 
   const outline = useMemo(
     () => activeDocument ? extractOutline(activeDocument.source) : [],
@@ -1160,6 +1185,7 @@ function App() {
                 darkMode={darkMode}
                 findRequest={findRequest}
                 typewriterMode={typewriterMode}
+                wikiLinkFiles={workspaceFiles}
                 onChange={(source) =>
                   updateDocuments((current) =>
                     current.map((document) =>
@@ -1219,10 +1245,12 @@ function App() {
                 ref={previewRef}
                 documentPath={activeDocument.path}
                 source={activeDocument.source}
+                wikiLinksEnabled={Boolean(workspaceRoot)}
                 settings={appSettings.preview}
                 customCss={customCss}
                 darkMode={darkMode}
                 onScrollAnchor={syncEditorFromPreview}
+                onOpenWikiLink={openWikiLink}
               />
             </section>
           </div>

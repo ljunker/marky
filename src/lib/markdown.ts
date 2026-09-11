@@ -13,6 +13,7 @@ import yaml from "highlight.js/lib/languages/yaml";
 import MarkdownIt, {
   type MarkdownIt as MarkdownItInstance,
   type RendererRule,
+  type StateInline,
 } from "markdown-it";
 import taskLists from "markdown-it-task-lists";
 import type { OutlineItem } from "../types";
@@ -55,6 +56,35 @@ const markdown: MarkdownItInstance = new MarkdownIt({
 });
 
 markdown.use(taskLists, { enabled: false, label: true, labelAfter: true });
+markdown.inline.ruler.before(
+  "link",
+  "marky-wiki-link",
+  (state: StateInline, silent: boolean): boolean => {
+    if (
+      !state.env.wikiLinksEnabled
+      || state.linkLevel > 0
+      || !state.src.startsWith("[[", state.pos)
+    ) {
+      return false;
+    }
+    const end = state.src.indexOf("]]", state.pos + 2);
+    if (end < 0) return false;
+    const target = state.src.slice(state.pos + 2, end);
+    if (!/^.+\.(?:md|markdown)$/i.test(target) || target.includes("\n")) {
+      return false;
+    }
+    if (!silent) {
+      const open = state.push("link_open", "a", 1);
+      open.attrSet("href", "#");
+      open.attrSet("data-wiki-link", target);
+      const text = state.push("text", "", 0);
+      text.content = target;
+      state.push("link_close", "a", -1);
+    }
+    state.pos = end + 2;
+    return true;
+  },
+);
 markdown.core.ruler.after("block", "marky-source-lines", (state) => {
   for (const token of state.tokens) {
     if (token.map && token.block && token.nesting !== -1) {
@@ -116,8 +146,11 @@ const linkRenderer: RendererRule = (
   environment,
   renderer,
 ) => {
-  tokens[index].attrSet("rel", "noreferrer noopener");
-  tokens[index].attrSet("target", "_blank");
+  const token = tokens[index];
+  if (!token.attrGet("data-wiki-link")) {
+    token.attrSet("rel", "noreferrer noopener");
+    token.attrSet("target", "_blank");
+  }
   if (defaultLinkOpenRenderer) {
     return defaultLinkOpenRenderer(tokens, index, options, environment, renderer);
   }
@@ -134,13 +167,14 @@ export function isRelativeAsset(source: string): boolean {
   );
 }
 
-export function renderMarkdown(source: string): string {
-  return DOMPurify.sanitize(markdown.render(source), {
+export function renderMarkdown(source: string, wikiLinksEnabled = false): string {
+  return DOMPurify.sanitize(markdown.render(source, { wikiLinksEnabled }), {
     USE_PROFILES: { html: true },
     ADD_ATTR: [
       "checked",
       "data-local-src",
       "data-source-line",
+      "data-wiki-link",
       "disabled",
       "rel",
       "target",

@@ -7,6 +7,7 @@ import {
   useRef,
 } from "react";
 import CodeMirror from "@uiw/react-codemirror";
+import { autocompletion } from "@codemirror/autocomplete";
 import { markdown } from "@codemirror/lang-markdown";
 import { openSearchPanel } from "@codemirror/search";
 import { EditorSelection } from "@codemirror/state";
@@ -33,11 +34,13 @@ import {
   createSmartUrlPasteEdit,
 } from "../lib/editorInput";
 import { createMarkdownEdit, type MarkdownAction } from "../lib/formatting";
+import { createWikiLinkCompletionSource } from "../lib/wikiLinks";
 import type {
   DocumentState,
   ImageDropPayload,
   ImportedAsset,
   ScrollAnchor,
+  WorkspaceFile,
 } from "../types";
 
 const formatGroups = [
@@ -78,6 +81,7 @@ interface CodeEditorProps {
   darkMode: boolean;
   findRequest: number;
   typewriterMode: boolean;
+  wikiLinkFiles: WorkspaceFile[];
   onChange: (source: string) => void;
   onPositionChange: (
     selectionFrom: number,
@@ -96,6 +100,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
       darkMode,
       findRequest,
       typewriterMode,
+      wikiLinkFiles,
       onChange,
       onPositionChange,
       onEnsureSaved,
@@ -225,6 +230,9 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
     const extensions = useMemo(
       () => [
         markdown(),
+        autocompletion({
+          override: [createWikiLinkCompletionSource(wikiLinkFiles)],
+        }),
         EditorView.lineWrapping,
         keymap.of([
           {
@@ -321,6 +329,7 @@ export const CodeEditor = forwardRef<CodeEditorHandle, CodeEditorProps>(
         onScrollAnchor,
         performAction,
         typewriterMode,
+        wikiLinkFiles,
       ],
     );
 

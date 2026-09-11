@@ -26,18 +26,31 @@ export interface MarkdownPreviewHandle {
 interface MarkdownPreviewProps {
   documentPath: string | null;
   source: string;
+  wikiLinksEnabled: boolean;
   settings: PreviewSettings;
   customCss: string;
   darkMode: boolean;
   onScrollAnchor: (anchor: ScrollAnchor) => void;
+  onOpenWikiLink: (relativePath: string) => void;
 }
 
 export const MarkdownPreview = forwardRef<MarkdownPreviewHandle, MarkdownPreviewProps>(
   function MarkdownPreview(
-    { documentPath, source, settings, customCss, darkMode, onScrollAnchor },
+    {
+      documentPath,
+      source,
+      wikiLinksEnabled,
+      settings,
+      customCss,
+      darkMode,
+      onScrollAnchor,
+      onOpenWikiLink,
+    },
     forwardedRef,
   ) {
-    const [html, setHtml] = useState(() => renderMarkdown(source));
+    const [html, setHtml] = useState(() =>
+      renderMarkdown(source, wikiLinksEnabled),
+    );
     const hostRef = useRef<HTMLDivElement>(null);
     const scrollRef = useRef<HTMLDivElement | null>(null);
     const articleRef = useRef<HTMLElement | null>(null);
@@ -45,6 +58,8 @@ export const MarkdownPreview = forwardRef<MarkdownPreviewHandle, MarkdownPreview
     const customStyleRef = useRef<HTMLStyleElement | null>(null);
     const onScrollAnchorRef = useRef(onScrollAnchor);
     onScrollAnchorRef.current = onScrollAnchor;
+    const onOpenWikiLinkRef = useRef(onOpenWikiLink);
+    onOpenWikiLinkRef.current = onOpenWikiLink;
 
     useEffect(() => {
       const host = hostRef.current;
@@ -79,6 +94,12 @@ export const MarkdownPreview = forwardRef<MarkdownPreviewHandle, MarkdownPreview
         const target = event.target as Element | null;
         const anchor = target?.closest<HTMLAnchorElement>("a");
         if (!anchor) return;
+        const wikiLink = anchor.dataset.wikiLink;
+        if (wikiLink) {
+          event.preventDefault();
+          onOpenWikiLinkRef.current(wikiLink);
+          return;
+        }
         const href = anchor.getAttribute("href");
         if (!href || href.startsWith("#")) return;
         event.preventDefault();
@@ -98,9 +119,12 @@ export const MarkdownPreview = forwardRef<MarkdownPreviewHandle, MarkdownPreview
     }, []);
 
     useEffect(() => {
-      const timer = window.setTimeout(() => setHtml(renderMarkdown(source)), 100);
+      const timer = window.setTimeout(
+        () => setHtml(renderMarkdown(source, wikiLinksEnabled)),
+        100,
+      );
       return () => window.clearTimeout(timer);
-    }, [source]);
+    }, [source, wikiLinksEnabled]);
 
     useEffect(() => {
       if (articleRef.current) articleRef.current.innerHTML = html;

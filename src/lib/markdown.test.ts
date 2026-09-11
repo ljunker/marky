@@ -63,4 +63,29 @@ fn main() {}
     expect(isRelativeAsset("https://example.com/bild.png")).toBe(false);
     expect(isRelativeAsset("/absolut/bild.png")).toBe(false);
   });
+
+  it("rendert Wiki-Links nur bei geöffnetem Workspace als interne Links", () => {
+    const source = "Siehe [[Kapitel/Start.md]] und [[Anhang.markdown]].";
+    const enabled = renderMarkdown(source, true);
+    const disabled = renderMarkdown(source);
+
+    expect(enabled).toContain(
+      '<a href="#" data-wiki-link="Kapitel/Start.md">Kapitel/Start.md</a>',
+    );
+    expect(enabled).toContain(
+      '<a href="#" data-wiki-link="Anhang.markdown">Anhang.markdown</a>',
+    );
+    expect(enabled).not.toContain('target="_blank"');
+    expect(disabled).toContain("[[Kapitel/Start.md]]");
+    expect(disabled).not.toContain("data-wiki-link");
+  });
+
+  it("wandelt Wiki-Link-Syntax in Code und für andere Dateitypen nicht um", () => {
+    const html = renderMarkdown(
+      "`[[Inline.md]]`\n\n```md\n[[Block.md]]\n```\n\n[[Text.txt]]",
+      true,
+    );
+
+    expect(html).not.toContain("data-wiki-link");
+  });
 });
