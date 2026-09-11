@@ -3,6 +3,7 @@ import { EditorState } from "@codemirror/state";
 import { describe, expect, it } from "vitest";
 import {
   createWikiLinkCompletionSource,
+  createWikiLinkSearchQuery,
   normalizeWikiLinkPath,
 } from "./wikiLinks";
 
@@ -42,5 +43,11 @@ describe("Wiki-Link-Autovervollständigung", () => {
 
   it("normalisiert Windows-Pfade für portierbare Wiki-Links", () => {
     expect(normalizeWikiLinkPath("Kapitel\\Start.md")).toBe("Kapitel/Start.md");
+  });
+
+  it("erzeugt die exakte Suchsyntax für Backlinks", () => {
+    expect(createWikiLinkSearchQuery("Kapitel\\Start.md")).toBe(
+      "[[Kapitel/Start.md]]",
+    );
   });
 });

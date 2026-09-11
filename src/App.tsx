@@ -35,6 +35,7 @@ import {
   saveSettings,
 } from "./api";
 import { ActionDialog } from "./components/ActionDialog";
+import { BacklinksSidebar } from "./components/BacklinksSidebar";
 import { CodeEditor, type CodeEditorHandle } from "./components/CodeEditor";
 import { ConflictResolver } from "./components/ConflictResolver";
 import {
@@ -119,6 +120,7 @@ function App() {
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>("files");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(270);
+  const [backlinksCollapsed, setBacklinksCollapsed] = useState(false);
   const [editorRatio, setEditorRatio] = useState(0.5);
   const [treeRefreshToken, setTreeRefreshToken] = useState(0);
   const [findRequest, setFindRequest] = useState(0);
@@ -994,6 +996,12 @@ function App() {
     ),
     [workspaceFiles],
   );
+  const activeWorkspaceFile = useMemo(
+    () => activeDocument?.path
+      ? workspaceFiles.find((file) => file.path === activeDocument.path) ?? null
+      : null,
+    [activeDocument?.path, workspaceFiles],
+  );
   const openWikiLink = useCallback((relativePath: string) => {
     if (!workspaceRoot) return;
     const path = wikiLinkTargets.get(normalizeWikiLinkPath(relativePath));
@@ -1274,6 +1282,18 @@ function App() {
               </button>
             </div>
           </section>
+        )}
+
+        {workspaceRoot && !focusMode && activeDocument && (
+          <BacklinksSidebar
+            workspaceRoot={workspaceRoot}
+            targetRelativePath={activeWorkspaceFile?.relativePath ?? null}
+            collapsed={backlinksCollapsed}
+            refreshToken={treeRefreshToken}
+            onToggle={() => setBacklinksCollapsed((value) => !value)}
+            onOpenHit={(hit) => void openSearchHit(hit)}
+            onError={showToast}
+          />
         )}
       </main>
 

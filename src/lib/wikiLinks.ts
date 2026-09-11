@@ -8,6 +8,10 @@ export function normalizeWikiLinkPath(relativePath: string): string {
   return relativePath.replace(/\\/g, "/");
 }
 
+export function createWikiLinkSearchQuery(relativePath: string): string {
+  return `[[${normalizeWikiLinkPath(relativePath)}]]`;
+}
+
 export function createWikiLinkCompletionSource(
   files: WorkspaceFile[],
 ): CompletionSource {
